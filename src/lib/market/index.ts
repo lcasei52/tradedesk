@@ -2,6 +2,7 @@ import { Quote } from "./types";
 import { getEastmoneyQuote } from "./eastmoney";
 import { getYahooQuote } from "./yahoo";
 import { getBinanceQuote } from "./binance";
+import { getCoinGeckoQuote } from "./coingecko";
 
 // Simple in-memory cache: symbol -> { quote, timestamp }
 const cache = new Map<string, { quote: Quote; ts: number }>();
@@ -24,7 +25,8 @@ async function fetchQuote(symbol: string, market?: string): Promise<Quote | null
     case "a_share":
       return getEastmoneyQuote(symbol);
     case "crypto":
-      return getBinanceQuote(symbol);
+      // Binance first (more precise), CoinGecko fallback (works from China)
+      return (await getBinanceQuote(symbol)) || (await getCoinGeckoQuote(symbol));
     case "hk_stock":
     case "us_stock":
       // Try Yahoo first, fallback not available for these markets
