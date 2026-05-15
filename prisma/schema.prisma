@@ -1,0 +1,41 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Position {
+  id        String   @id @default(cuid())
+  symbol    String   @unique // "SHA:510210", "NASDAQ:AAPL", "BINANCE:BTCUSDT"
+  name      String
+  market    String   // "a_share" | "hk_stock" | "us_stock" | "crypto"
+  quantity  Float
+  costPrice Float
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model DailySnapshot {
+  id          String   @id @default(cuid())
+  date        String   @unique // "2026-05-14"
+  totalAssets Float
+  totalCost   Float
+  positions   Json     // [{symbol, name, quantity, costPrice, currentPrice, marketValue, profit}]
+  createdAt   DateTime @default(now())
+}
+
+model Conversation {
+  id        String   @id @default(cuid())
+  title     String   @default("New Chat")
+  messages  Json     // [{role, content, timestamp}]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Settings {
+  id    String @id @default("default")
+  value Json   // {llm: {baseUrl, apiKey, model, ...}, telegram: {botToken, chatId}, binance: {apiKey, apiSecret}}
+}
