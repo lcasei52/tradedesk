@@ -2,6 +2,7 @@
 
 import PortfolioPanel from "@/components/PortfolioPanel";
 import ChatPanel from "@/components/ChatPanel";
+import ChartPanel from "@/components/ChartPanel";
 import { useRef } from "react";
 import Link from "next/link";
 
@@ -22,7 +23,12 @@ export default function Home() {
 
       <div className="flex-1 flex min-h-0">
         <aside className="w-[380px] border-r border-border flex flex-col bg-sidebar-bg shrink-0">
-          <PortfolioPanel ref={portfolioRef} />
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <PortfolioPanel ref={portfolioRef} />
+          </div>
+          <div className="h-[220px] border-t border-border shrink-0">
+            <ChartPanel />
+          </div>
         </aside>
         <main className="flex-1 flex flex-col min-w-0">
           <ChatPanel onPositionChange={() => portfolioRef.current?.reload()} />
