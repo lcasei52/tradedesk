@@ -1,11 +1,152 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 
 interface Settings {
   llm: { baseUrl: string; apiKey: string; model: string; hasApiKey: boolean };
   telegram: { botToken: string; chatId: string; hasBotToken: boolean };
+}
+
+interface ExchangeAccount {
+  id: string;
+  name: string;
+  exchange: string;
+  apiKey: string;
+  isDemo: boolean;
+}
+
+const EXCHANGE_LABELS: Record<string, string> = {
+  binance: "Binance",
+  okx: "OKX",
+  gate: "Gate.io",
+};
+
+function ExchangeAccounts() {
+  const [accounts, setAccounts] = useState<ExchangeAccount[]>([]);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ name: "", exchange: "binance", apiKey: "", apiSecret: "" });
+  const [adding, setAdding] = useState(false);
+  const [formError, setFormError] = useState("");
+
+  const load = useCallback(async () => {
+    const res = await fetch("/api/exchange-accounts");
+    if (res.ok) setAccounts(await res.json());
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleAdd = async () => {
+    setAdding(true);
+    setFormError("");
+    try {
+      const res = await fetch("/api/exchange-accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setFormError(data.error || "添加失败");
+        return;
+      }
+      setShowForm(false);
+      setForm({ name: "", exchange: "binance", apiKey: "", apiSecret: "" });
+      await load();
+    } catch {
+      setFormError("请求失败");
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("删除账号将同时移除该账号同步的持仓数据，确定？")) return;
+    await fetch(`/api/exchange-accounts/${id}`, { method: "DELETE" });
+    await load();
+  };
+
+  return (
+    <div>
+      {accounts.length > 0 ? (
+        <div className="space-y-2 mb-4">
+          {accounts.map((acc) => (
+            <div key={acc.id} className="flex items-center justify-between px-3 py-2 rounded-lg border border-border bg-card-bg">
+              <div>
+                <span className="text-sm font-medium">{acc.name}</span>
+                <span className="text-xs text-muted ml-2">{EXCHANGE_LABELS[acc.exchange] || acc.exchange}</span>
+                {acc.isDemo && <span className="text-xs text-muted ml-1">(模拟盘)</span>}
+                <span className="text-xs text-muted ml-2">Key: {acc.apiKey}</span>
+              </div>
+              <button
+                onClick={() => handleDelete(acc.id)}
+                className="text-xs text-muted hover:text-loss transition-colors"
+              >
+                删除
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-muted mb-4">暂无交易所账号</p>
+      )}
+
+      {showForm ? (
+        <div className="space-y-3 p-4 rounded-lg border border-border bg-card-bg">
+          <input
+            type="text"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            placeholder="账号名称（如：币安主号）"
+            className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm outline-none focus:border-primary"
+          />
+          <select
+            value={form.exchange}
+            onChange={(e) => setForm({ ...form, exchange: e.target.value })}
+            className="w-full px-3 py-2 rounded-lg border border-border bg-card-bg text-sm outline-none focus:border-primary"
+          >
+            <option value="binance">Binance</option>
+            <option value="okx">OKX（暂不支持）</option>
+            <option value="gate">Gate.io（暂不支持）</option>
+          </select>
+          <input
+            type="text"
+            value={form.apiKey}
+            onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+            placeholder="API Key"
+            className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm outline-none focus:border-primary"
+          />
+          <input
+            type="password"
+            value={form.apiSecret}
+            onChange={(e) => setForm({ ...form, apiSecret: e.target.value })}
+            placeholder="API Secret"
+            className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm outline-none focus:border-primary"
+          />
+          {formError && <p className="text-xs text-loss">{formError}</p>}
+          <div className="flex gap-2">
+            <button
+              onClick={handleAdd}
+              disabled={adding || !form.name || !form.apiKey || !form.apiSecret}
+              className="px-4 py-2 rounded-lg bg-primary text-white text-sm disabled:opacity-40"
+            >
+              {adding ? "连接测试中..." : "添加并测试"}
+            </button>
+            <button onClick={() => { setShowForm(false); setFormError(""); }} className="px-4 py-2 rounded-lg border border-border text-sm">
+              取消
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => setShowForm(true)}
+          className="px-4 py-2 text-sm rounded-lg border border-dashed border-border text-muted hover:border-primary hover:text-primary transition-colors"
+        >
+          + 添加交易所账号
+        </button>
+      )}
+    </div>
+  );
 }
 
 export default function SettingsPage() {
@@ -165,6 +306,12 @@ export default function SettingsPage() {
               测试推送
             </button>
           </div>
+        </section>
+
+        {/* Exchange Accounts */}
+        <section className="mb-8">
+          <h2 className="text-base font-medium mb-4 pb-2 border-b border-border">交易所账号</h2>
+          <ExchangeAccounts />
         </section>
 
         {/* Save */}

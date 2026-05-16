@@ -9,6 +9,12 @@ interface PositionRow {
   market: string;
   quantity: number;
   costPrice: number;
+  direction: string | null;
+  leverage: number | null;
+  margin: number | null;
+  liquidationPrice: number | null;
+  unrealizedPnl: number | null;
+  entryPrice: number | null;
 }
 
 const MARKET_LABEL: Record<string, string> = {
@@ -31,6 +37,23 @@ interface ReportData {
   dailyChangePct: number;
 }
 
+function isFutures(p: PositionRow) {
+  return p.direction === "long" || p.direction === "short";
+}
+
+function posValue(p: PositionRow, quotePrice: number | undefined): number {
+  const cp = quotePrice ?? p.costPrice;
+  if (isFutures(p)) {
+    return (p.margin ?? 0) + (p.unrealizedPnl ?? 0);
+  }
+  return cp * p.quantity;
+}
+
+function posCost(p: PositionRow): number {
+  if (isFutures(p)) return p.margin ?? 0;
+  return p.costPrice * p.quantity;
+}
+
 async function collectData(): Promise<ReportData> {
   const positions = await prisma.position.findMany({ orderBy: { market: "asc" } });
 
@@ -42,15 +65,14 @@ async function collectData(): Promise<ReportData> {
     })
   );
 
-  const totalCost = positions.reduce((s, p) => s + p.costPrice * p.quantity, 0);
+  const totalCost = positions.reduce((s, p) => s + posCost(p), 0);
   const totalValue = positions.reduce(
-    (s, p) => s + (quotes.get(p.symbol)?.price ?? p.costPrice) * p.quantity,
+    (s, p) => s + posValue(p, quotes.get(p.symbol)?.price),
     0
   );
   const totalProfit = totalValue - totalCost;
   const totalProfitPct = totalCost > 0 ? (totalProfit / totalCost) * 100 : 0;
 
-  // Get yesterday's snapshot for daily change
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterdayStr = yesterday.toISOString().slice(0, 10);
@@ -64,7 +86,6 @@ async function collectData(): Promise<ReportData> {
     ? (dailyChange / yesterdaySnapshot.totalAssets) * 100
     : 0;
 
-  // Recent 7 days for sparkline
   const recentSnapshots = await prisma.dailySnapshot.findMany({
     orderBy: { date: "desc" },
     take: 7,
@@ -72,7 +93,19 @@ async function collectData(): Promise<ReportData> {
   recentSnapshots.reverse();
 
   return {
-    positions,
+    positions: positions.map((p) => ({
+      symbol: p.symbol,
+      name: p.name,
+      market: p.market,
+      quantity: p.quantity,
+      costPrice: p.costPrice,
+      direction: p.direction,
+      leverage: p.leverage,
+      margin: p.margin,
+      liquidationPrice: p.liquidationPrice,
+      unrealizedPnl: p.unrealizedPnl,
+      entryPrice: p.entryPrice,
+    })),
     quotes,
     yesterdaySnapshot: yesterdaySnapshot
       ? { totalAssets: yesterdaySnapshot.totalAssets, totalCost: yesterdaySnapshot.totalCost }
@@ -119,7 +152,6 @@ function buildMarkdownReport(data: ReportData): string {
     `  📦 持仓数  ${positions.length}`,
   ];
 
-  // Sparkline
   if (recentSnapshots.length >= 2) {
     const values = recentSnapshots.map((s) => s.totalAssets);
     const chart = sparkline(values);
@@ -131,7 +163,6 @@ function buildMarkdownReport(data: ReportData): string {
 
   lines.push(``, `━━━━━━━━━━━━━━━━━━━━`, ``);
 
-  // Group by market
   const grouped = new Map<string, PositionRow[]>();
   for (const pos of positions) {
     const g = grouped.get(pos.market) || [];
@@ -141,7 +172,7 @@ function buildMarkdownReport(data: ReportData): string {
 
   for (const [market, group] of grouped) {
     const groupValue = group.reduce(
-      (s, p) => s + (quotes.get(p.symbol)?.price ?? p.costPrice) * p.quantity,
+      (s, p) => s + posValue(p, quotes.get(p.symbol)?.price),
       0
     );
     const groupPct = totalValue > 0 ? (groupValue / totalValue) * 100 : 0;
@@ -150,22 +181,43 @@ function buildMarkdownReport(data: ReportData): string {
 
     for (const pos of group) {
       const q = quotes.get(pos.symbol);
-      const cp = q?.price ?? pos.costPrice;
       const changePct = q?.changePct ?? 0;
-      const profit = (cp - pos.costPrice) * pos.quantity;
-      const profitPct = pos.costPrice > 0 ? ((cp - pos.costPrice) / pos.costPrice) * 100 : 0;
-      const mv = cp * pos.quantity;
-      const allocPct = totalValue > 0 ? (mv / totalValue) * 100 : 0;
+      const allocPct = totalValue > 0 ? (posValue(pos, q?.price) / totalValue) * 100 : 0;
 
-      const changeIcon = changePct >= 0 ? "🔺" : "🔻";
-      const profitIcon = profit >= 0 ? "🔴" : "🟢";
+      if (isFutures(pos)) {
+        const directionLabel = pos.direction === "long" ? "多" : "空";
+        const pnl = pos.unrealizedPnl ?? 0;
+        const pnlPct = (pos.margin ?? 0) > 0 ? (pnl / (pos.margin ?? 1)) * 100 : 0;
+        const mv = posValue(pos, q?.price);
 
-      lines.push(
-        `  ${pos.name} (${pos.symbol})`,
-        `    ${changeIcon} ${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%  ${profitIcon} ${profitPct >= 0 ? "+" : ""}${profitPct.toFixed(2)}%  占比 ${allocPct.toFixed(1)}%`,
-        `    市值 ¥${mv.toFixed(0)} · 数量 ${pos.quantity}`,
-        ``
-      );
+        const changeIcon = changePct >= 0 ? "🔺" : "🔻";
+        const pnlIcon = pnl >= 0 ? "🔴" : "🟢";
+
+        lines.push(
+          `  ${pos.name} (${pos.symbol})`,
+          `    ${changeIcon} ${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%  ${pnlIcon} ${directionLabel} ${pos.leverage}x  ${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%`,
+          `    保证金 ¥${mv.toFixed(0)} · 未实现 ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} USDT`,
+        );
+        if (pos.liquidationPrice && pos.liquidationPrice > 0) {
+          lines.push(`    ⚠️ 强平价 ${pos.liquidationPrice.toFixed(4)}`);
+        }
+        lines.push(``);
+      } else {
+        const cp = q?.price ?? pos.costPrice;
+        const profit = (cp - pos.costPrice) * pos.quantity;
+        const profitPct = pos.costPrice > 0 ? ((cp - pos.costPrice) / pos.costPrice) * 100 : 0;
+        const mv = cp * pos.quantity;
+
+        const changeIcon = changePct >= 0 ? "🔺" : "🔻";
+        const profitIcon = profit >= 0 ? "🔴" : "🟢";
+
+        lines.push(
+          `  ${pos.name} (${pos.symbol})`,
+          `    ${changeIcon} ${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%  ${profitIcon} ${profitPct >= 0 ? "+" : ""}${profitPct.toFixed(2)}%  占比 ${allocPct.toFixed(1)}%`,
+          `    市值 ¥${mv.toFixed(0)} · 数量 ${pos.quantity}`,
+          ``
+        );
+      }
     }
   }
 
@@ -175,10 +227,8 @@ function buildMarkdownReport(data: ReportData): string {
 
   const risks: string[] = [];
 
-  // Concentration risk
   for (const pos of positions) {
-    const cp = quotes.get(pos.symbol)?.price ?? pos.costPrice;
-    const allocPct = totalValue > 0 ? (cp * pos.quantity / totalValue) * 100 : 0;
+    const allocPct = totalValue > 0 ? (posValue(pos, quotes.get(pos.symbol)?.price) / totalValue) * 100 : 0;
     if (allocPct > 50) {
       risks.push(`⚠️ ${pos.name} 占比 ${allocPct.toFixed(1)}%，持仓过于集中`);
     }
@@ -188,10 +238,9 @@ function buildMarkdownReport(data: ReportData): string {
     risks.push("⚠️ 仅持有 1 只标的，集中度风险极高");
   }
 
-  // Market concentration
   for (const [market, group] of grouped) {
     const groupValue = group.reduce(
-      (s, p) => s + (quotes.get(p.symbol)?.price ?? p.costPrice) * p.quantity,
+      (s, p) => s + posValue(p, quotes.get(p.symbol)?.price),
       0
     );
     const groupPct = totalValue > 0 ? (groupValue / totalValue) * 100 : 0;
@@ -200,7 +249,23 @@ function buildMarkdownReport(data: ReportData): string {
     }
   }
 
-  // Profit/loss warnings
+  // Leverage risk
+  const futuresPositions = positions.filter(isFutures);
+  for (const fp of futuresPositions) {
+    if ((fp.leverage ?? 0) >= 10) {
+      risks.push(`⚠️ ${fp.name} 使用 ${fp.leverage}x 杠杆，风险较高`);
+    }
+    if (fp.liquidationPrice && fp.liquidationPrice > 0) {
+      const q = quotes.get(fp.symbol)?.price ?? fp.entryPrice ?? fp.costPrice;
+      const distPct = fp.direction === "long"
+        ? ((q - fp.liquidationPrice) / q) * 100
+        : ((fp.liquidationPrice - q) / q) * 100;
+      if (distPct < 10) {
+        risks.push(`🔴 ${fp.name} 距强平仅 ${distPct.toFixed(1)}%，极度危险！`);
+      }
+    }
+  }
+
   if (totalProfitPct > 20) {
     risks.push(`💡 浮盈 ${totalProfitPct.toFixed(1)}%，可考虑部分止盈`);
   } else if (totalProfitPct < -10) {
@@ -230,11 +295,15 @@ async function generateLLMCommentary(data: ReportData): Promise<string> {
       baseURL: config.baseURL,
     });
 
-    // Build position summary for LLM
     const posSummary = data.positions.map((p) => {
       const q = data.quotes.get(p.symbol);
-      const cp = q?.price ?? p.costPrice;
       const changePct = q?.changePct ?? 0;
+      if (isFutures(p)) {
+        const pnl = p.unrealizedPnl ?? 0;
+        const dir = p.direction === "long" ? "多" : "空";
+        return `${p.name}(${p.symbol}): ${dir}${p.leverage}x, 未实现盈亏${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}USDT, 今日${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`;
+      }
+      const cp = q?.price ?? p.costPrice;
       const profitPct = p.costPrice > 0 ? ((cp - p.costPrice) / p.costPrice) * 100 : 0;
       const allocPct = data.totalValue > 0 ? (cp * p.quantity / data.totalValue) * 100 : 0;
       return `${p.name}(${p.symbol}): 现价${cp.toFixed(4)}, 今日${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%, 盈亏${profitPct >= 0 ? "+" : ""}${profitPct.toFixed(2)}%, 占比${allocPct.toFixed(1)}%`;
@@ -280,7 +349,6 @@ export async function generateDailyReport(withLLM = true): Promise<string> {
 
   let report = buildMarkdownReport(data);
 
-  // LLM commentary
   if (withLLM) {
     const commentary = await generateLLMCommentary(data);
     if (commentary) {
@@ -320,6 +388,9 @@ export async function saveDailySnapshot(data?: ReportData): Promise<void> {
         quantity: p.quantity,
         costPrice: p.costPrice,
         currentPrice: quotes.get(p.symbol) ?? p.costPrice,
+        direction: p.direction,
+        leverage: p.leverage,
+        unrealizedPnl: p.unrealizedPnl,
       })),
     },
     update: {
@@ -332,6 +403,9 @@ export async function saveDailySnapshot(data?: ReportData): Promise<void> {
         quantity: p.quantity,
         costPrice: p.costPrice,
         currentPrice: quotes.get(p.symbol) ?? p.costPrice,
+        direction: p.direction,
+        leverage: p.leverage,
+        unrealizedPnl: p.unrealizedPnl,
       })),
     },
   });

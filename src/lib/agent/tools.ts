@@ -31,7 +31,15 @@ export const toolDefinitions = [
   },
   {
     name: "get_portfolio",
-    description: "获取用户当前所有持仓列表，包含代码、名称、市场、数量、成本价。不返回实时行情，需要行情数据请用 get_quote。",
+    description: "获取用户当前所有持仓列表，包含代码、名称、市场、数量、成本价，以及合约的方向、杠杆、未实现盈亏等。不返回实时行情，需要行情数据请用 get_quote。",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+    },
+  },
+  {
+    name: "sync_crypto",
+    description: "从交易所同步加密货币持仓（现货+合约）。当用户说'同步持仓'、'刷新加密仓位'时调用。同步后建议再调用 get_portfolio 查看最新状态。",
     input_schema: {
       type: "object" as const,
       properties: {},
@@ -113,6 +121,7 @@ export async function executeTool(
       case "get_portfolio": {
         const positions = await prisma.position.findMany({
           orderBy: { createdAt: "desc" },
+          include: { exchangeAccount: { select: { name: true } } },
         });
         if (positions.length === 0) {
           return { content: "当前无持仓" };
@@ -125,9 +134,37 @@ export async function executeTool(
               market: p.market,
               quantity: p.quantity,
               costPrice: p.costPrice,
+              direction: p.direction,
+              leverage: p.leverage,
+              margin: p.margin,
+              entryPrice: p.entryPrice,
+              unrealizedPnl: p.unrealizedPnl,
+              liquidationPrice: p.liquidationPrice,
+              exchangeAccount: p.exchangeAccount?.name ?? null,
             }))
           ),
         };
+      }
+
+      case "sync_crypto": {
+        const accounts = await prisma.exchangeAccount.findMany();
+        if (accounts.length === 0) {
+          return { content: "未配置交易所账号，请先在设置页添加", error: true };
+        }
+        const res = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/api/exchange/sync`, {
+          method: "POST",
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          return { content: `同步失败：${data.error || "未知错误"}`, error: true };
+        }
+        const summary = (data.results || [])
+          .map((r: { account: string; spot: number; futures: number; errors: string[] }) => {
+            if (r.errors.length > 0) return `${r.account}: ${r.errors.join(", ")}`;
+            return `${r.account}: 现货${r.spot}个, 合约${r.futures}个`;
+          })
+          .join("; ");
+        return { content: `同步完成 — ${summary}` };
       }
 
       case "update_position": {
@@ -141,8 +178,8 @@ export async function executeTool(
         };
 
         if (action === "buy") {
-          const existing = await prisma.position.findUnique({
-            where: { symbol },
+          const existing = await prisma.position.findFirst({
+            where: { symbol, direction: null },
           });
 
           if (existing) {
@@ -151,7 +188,7 @@ export async function executeTool(
               (existing.costPrice * existing.quantity + price * quantity) /
               totalQty;
             await prisma.position.update({
-              where: { symbol },
+              where: { id: existing.id },
               data: {
                 quantity: totalQty,
                 costPrice: Math.round(avgCost * 10000) / 10000,
@@ -173,8 +210,8 @@ export async function executeTool(
         }
 
         if (action === "sell") {
-          const existing = await prisma.position.findUnique({
-            where: { symbol },
+          const existing = await prisma.position.findFirst({
+            where: { symbol, direction: null },
           });
           if (!existing) {
             return { content: `未找到 ${symbol} 的持仓`, error: true };
@@ -182,14 +219,14 @@ export async function executeTool(
 
           const remaining = existing.quantity - quantity;
           if (remaining <= 0) {
-            await prisma.position.delete({ where: { symbol } });
+            await prisma.position.delete({ where: { id: existing.id } });
             return {
               content: `清仓：${name}(${symbol}) 全部卖出 @ ${price}`,
             };
           }
 
           await prisma.position.update({
-            where: { symbol },
+            where: { id: existing.id },
             data: { quantity: remaining },
           });
           return {
