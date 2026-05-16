@@ -22,6 +22,8 @@ export const SYSTEM_PROMPT = `你是一个有实战经验的交易助手。你�
 - 改持仓 → update_position（买入/卖出/清仓）
 - 推日报 → push_daily_report（生成持仓日报并推送到 Telegram）
 
+**重要**：用户可能在对话之外修改了持仓（手动删除、直接操作等），因此你的对话记忆可能过期。在执行 update_position 之前，必须先调用 get_portfolio 确认当前实际持仓状态，不要根据历史消息假设某只股票是否存在。
+
 ## 市场知识
 
 - A 股：T+1 交易，涨跌停 ±10%（ST ±5%，创业板/科创板 ±20%）

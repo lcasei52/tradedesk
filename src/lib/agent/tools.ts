@@ -40,7 +40,7 @@ export const toolDefinitions = [
   {
     name: "update_position",
     description:
-      "修改持仓。操作类型：buy（买入，增加持仓量和加权平均成本）、sell（卖出，减少持仓量，清零自动删除）。必须提供代码、名称、市场、数量、价格。",
+      "修改持仓。操作类型：buy（买入，增加持仓量和加权平均成本）、sell（卖出，减少持仓量，清零自动删除）。必须提供代码、名称、市场、数量、价格。注意：调用前必须先调用 get_portfolio 确认该股票当前是否实际持仓，不要依赖对话历史判断。",
     input_schema: {
       type: "object" as const,
       properties: {
