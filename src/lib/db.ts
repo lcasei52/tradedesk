@@ -5,7 +5,12 @@ import pg from "pg";
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
 
 function createPrisma() {
-  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+  const pool = new pg.Pool({
+    connectionString: process.env.DATABASE_URL,
+  });
+  pool.on("connect", (client) => {
+    client.query("SET client_encoding TO 'UTF8'");
+  });
   const adapter = new PrismaPg(pool);
   return new PrismaClient({ adapter });
 }

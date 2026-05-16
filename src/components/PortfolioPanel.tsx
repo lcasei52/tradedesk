@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 
 interface Position {
   symbol: string;
@@ -22,7 +22,8 @@ const MARKET_LABELS: Record<string, string> = {
   crypto: "加密",
 };
 
-export default function PortfolioPanel() {
+const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPanel(_, ref) {
+  useImperativeHandle(ref, () => ({ reload: load }));
   const [positions, setPositions] = useState<Position[]>([]);
   const [quotes, setQuotes] = useState<Map<string, Quote>>(new Map());
   const [filter, setFilter] = useState("all");
@@ -165,4 +166,6 @@ export default function PortfolioPanel() {
       </div>
     </div>
   );
-}
+});
+
+export default PortfolioPanel;

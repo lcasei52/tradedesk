@@ -1,0 +1,15 @@
+services:
+  tradedesk:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      # LLM defaults (can be overridden via Settings page)
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://open.bigmodel.cn/api/anthropic}
+      - LLM_MODEL=${LLM_MODEL:-glm-5.1}
+      # Telegram defaults (can be overridden via Settings page)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    restart: unless-stopped
