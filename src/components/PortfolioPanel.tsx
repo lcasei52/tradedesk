@@ -37,29 +37,45 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
   const [quotes, setQuotes] = useState<Map<string, Quote>>(new Map());
   const [filter, setFilter] = useState("all");
   const [syncing, setSyncing] = useState(false);
+  const [hasExchangeAccounts, setHasExchangeAccounts] = useState(false);
 
   const load = useCallback(() => {
     fetch("/api/positions")
       .then((r) => r.json())
       .then((data: Position[]) => {
         setPositions(data);
-        const symbols = new Set(data.map((p) => p.symbol));
-        symbols.forEach((symbol) => {
-          const pos = data.find((p) => p.symbol === symbol)!;
-          fetch(`/api/quote?symbol=${encodeURIComponent(symbol)}&market=${pos.market}`)
-            .then((r) => r.json())
-            .then((q) => {
-              if (q.price) {
-                setQuotes((prev) => {
-                  const next = new Map(prev);
-                  next.set(symbol, { price: q.price, changePct: q.changePct });
-                  return next;
-                });
-              }
-            })
-            .catch(() => {});
+        // Deduplicate symbols, use first position's market for each symbol
+        const symbolMarkets = new Map<string, string>();
+        for (const p of data) {
+          if (!symbolMarkets.has(p.symbol)) {
+            symbolMarkets.set(p.symbol, p.market);
+          }
+        }
+        // Fetch all quotes in parallel, update state once
+        const entries = Array.from(symbolMarkets.entries());
+        Promise.allSettled(
+          entries.map(([symbol, market]) =>
+            fetch(`/api/quote?symbol=${encodeURIComponent(symbol)}&market=${market}`)
+              .then((r) => r.json())
+              .then((q) => (q.price ? { symbol, price: q.price, changePct: q.changePct } : null))
+              .catch(() => null)
+          )
+        ).then((results) => {
+          const map = new Map<string, Quote>();
+          for (const r of results) {
+            if (r.status === "fulfilled" && r.value) {
+              map.set(r.value.symbol, { price: r.value.price, changePct: r.value.changePct });
+            }
+          }
+          setQuotes(map);
         });
       })
+      .catch(() => {});
+
+    // Check if exchange accounts exist
+    fetch("/api/exchange-accounts")
+      .then((r) => r.json())
+      .then((accounts: unknown[]) => setHasExchangeAccounts(accounts.length > 0))
       .catch(() => {});
   }, []);
 
@@ -83,7 +99,6 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
   // Total value calculation
   const totalValue = positions.reduce((s, p) => {
     if (isFutures(p)) {
-      // Futures: margin + unrealized PnL
       const pnl = p.unrealizedPnl ?? 0;
       return s + (p.margin ?? 0) + pnl;
     }
@@ -110,7 +125,7 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between mb-1">
           <div className="text-xs text-muted">总资产</div>
-          {positions.some((p) => p.market === "crypto") && (
+          {hasExchangeAccounts && (
             <button
               onClick={handleSync}
               disabled={syncing}
