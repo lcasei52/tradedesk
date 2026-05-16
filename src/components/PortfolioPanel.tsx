@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, forwardRef, useImperativeHandle } from "react";
+import { useEffect, useState, useCallback, useRef, forwardRef, useImperativeHandle } from "react";
 
 interface Position {
   id: string;
@@ -38,48 +38,59 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
   const [filter, setFilter] = useState("all");
   const [syncing, setSyncing] = useState(false);
   const [hasExchangeAccounts, setHasExchangeAccounts] = useState(false);
+  const positionsRef = useRef<Position[]>([]);
+
+  const fetchQuotes = useCallback((posList: Position[]) => {
+    const symbolMarkets = new Map<string, string>();
+    for (const p of posList) {
+      if (!symbolMarkets.has(p.symbol)) {
+        symbolMarkets.set(p.symbol, p.market);
+      }
+    }
+    const entries = Array.from(symbolMarkets.entries());
+    Promise.allSettled(
+      entries.map(([symbol, market]) =>
+        fetch(`/api/quote?symbol=${encodeURIComponent(symbol)}&market=${market}`)
+          .then((r) => r.json())
+          .then((q) => (q.price ? { symbol, price: q.price, changePct: q.changePct } : null))
+          .catch(() => null)
+      )
+    ).then((results) => {
+      const map = new Map<string, Quote>();
+      for (const r of results) {
+        if (r.status === "fulfilled" && r.value) {
+          map.set(r.value.symbol, { price: r.value.price, changePct: r.value.changePct });
+        }
+      }
+      setQuotes(map);
+    });
+  }, []);
 
   const load = useCallback(() => {
     fetch("/api/positions")
       .then((r) => r.json())
       .then((data: Position[]) => {
         setPositions(data);
-        // Deduplicate symbols, use first position's market for each symbol
-        const symbolMarkets = new Map<string, string>();
-        for (const p of data) {
-          if (!symbolMarkets.has(p.symbol)) {
-            symbolMarkets.set(p.symbol, p.market);
-          }
-        }
-        // Fetch all quotes in parallel, update state once
-        const entries = Array.from(symbolMarkets.entries());
-        Promise.allSettled(
-          entries.map(([symbol, market]) =>
-            fetch(`/api/quote?symbol=${encodeURIComponent(symbol)}&market=${market}`)
-              .then((r) => r.json())
-              .then((q) => (q.price ? { symbol, price: q.price, changePct: q.changePct } : null))
-              .catch(() => null)
-          )
-        ).then((results) => {
-          const map = new Map<string, Quote>();
-          for (const r of results) {
-            if (r.status === "fulfilled" && r.value) {
-              map.set(r.value.symbol, { price: r.value.price, changePct: r.value.changePct });
-            }
-          }
-          setQuotes(map);
-        });
+        positionsRef.current = data;
+        fetchQuotes(data);
       })
       .catch(() => {});
 
-    // Check if exchange accounts exist
     fetch("/api/exchange-accounts")
       .then((r) => r.json())
       .then((accounts: unknown[]) => setHasExchangeAccounts(accounts.length > 0))
       .catch(() => {});
-  }, []);
+  }, [fetchQuotes]);
 
-  useEffect(load, []);
+  useEffect(() => {
+    load();
+    const interval = setInterval(() => {
+      if (positionsRef.current.length > 0) {
+        fetchQuotes(positionsRef.current);
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [load, fetchQuotes]);
 
   const handleSync = async () => {
     setSyncing(true);
