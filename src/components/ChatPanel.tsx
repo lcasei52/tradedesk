@@ -62,23 +62,7 @@ export default function ChatPanel({ onPositionChange }: { onPositionChange?: () 
   const titleInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const loadConversations = useCallback(async () => {
-    const res = await fetch("/api/conversations");
-    if (res.ok) setConversations(await res.json());
-  }, []);
-
-  // Load conversation list on mount
-  useEffect(() => { loadConversations(); }, [loadConversations]);
-
-  // Auto-create first conversation if none exist
-  useEffect(() => {
-    if (conversations.length === 0 && !activeId) {
-      createConversation();
-    } else if (!activeId && conversations.length > 0) {
-      switchConversation(conversations[0].id);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversations.length]);
+  const [initialized, setInitialized] = useState(false);
 
   const createConversation = useCallback(async () => {
     const res = await fetch("/api/conversations", {
@@ -94,9 +78,11 @@ export default function ChatPanel({ onPositionChange }: { onPositionChange?: () 
       content: "你好！我是你的 AI 投资助手。可以问我行情、分析持仓，或者直接告诉我你的交易操作。",
     }]);
     setHistory([]);
-    await loadConversations();
+    // Refresh list
+    const listRes = await fetch("/api/conversations");
+    if (listRes.ok) setConversations(await listRes.json());
     setShowList(false);
-  }, [loadConversations]);
+  }, []);
 
   const switchConversation = useCallback(async (id: string) => {
     const res = await fetch(`/api/conversations/${id}`);
@@ -114,6 +100,44 @@ export default function ChatPanel({ onPositionChange }: { onPositionChange?: () 
       setMessages(saved.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })));
     }
     setShowList(false);
+  }, []);
+
+  const loadConversations = useCallback(async () => {
+    const res = await fetch("/api/conversations");
+    if (res.ok) setConversations(await res.json());
+  }, []);
+
+  // Load on mount: use existing conversation or create one
+  useEffect(() => {
+    (async () => {
+      const res = await fetch("/api/conversations");
+      if (!res.ok) return;
+      const list = await res.json();
+      setConversations(list);
+      if (list.length > 0) {
+        // Load the most recent conversation
+        const convRes = await fetch(`/api/conversations/${list[0].id}`);
+        if (convRes.ok) {
+          const conv = await convRes.json();
+          setActiveId(conv.id);
+          const saved = (conv.messages as { role: string; content: string }[]) || [];
+          setHistory(saved);
+          if (saved.length === 0) {
+            setMessages([{
+              role: "assistant",
+              content: "你好！我是你的 AI 投资助手。可以问我行情、分析持仓，或者直接告诉我你的交易操作。",
+            }]);
+          } else {
+            setMessages(saved.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })));
+          }
+        }
+      } else {
+        // No conversations exist, create one
+        await createConversation();
+      }
+      setInitialized(true);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const deleteConversation = useCallback(async (id: string, e: React.MouseEvent) => {
