@@ -21,10 +21,10 @@ export async function POST() {
     return NextResponse.json({ error: "没有配置交易所账号" }, { status: 400 });
   }
 
-  const results: { account: string; spot: number; futures: number; errors: string[] }[] = [];
+  const results: { account: string; spot: number; futures: number; futuresBalance: number; errors: string[] }[] = [];
 
   for (const account of accounts) {
-    const result = { account: account.name, spot: 0, futures: 0, errors: [] as string[] };
+    const result = { account: account.name, spot: 0, futures: 0, futuresBalance: 0, errors: [] as string[] };
 
     // Delete previous synced positions for this account
     await prisma.position.deleteMany({
@@ -89,6 +89,11 @@ export async function POST() {
       } catch (err) {
         result.errors.push(`合约同步失败: ${err instanceof Error ? err.message : String(err)}`);
       }
+
+      // Fetch futures wallet balance
+      try {
+        result.futuresBalance = await adapter.getFuturesBalance();
+      } catch {}
     } else {
       result.errors.push(`${account.exchange} 暂不支持自动同步`);
     }

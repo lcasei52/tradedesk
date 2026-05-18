@@ -20,6 +20,7 @@ export interface ExchangeAdapter {
   testConnection(): Promise<boolean>;
   getSpotBalances(): Promise<SpotBalance[]>;
   getFuturesPositions(): Promise<FuturesPosition[]>;
+  getFuturesBalance(): Promise<number>;
 }
 
 export interface ExchangeCredentials {

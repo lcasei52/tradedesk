@@ -8,7 +8,50 @@ import { getCoinGeckoQuote } from "./coingecko";
 const cache = new Map<string, { quote: Quote; ts: number }>();
 const CACHE_TTL = 10_000; // 10s
 
+// USD/CNY rate cache
+let usdCnyRate = 7.25;
+let usdCnyTs = 0;
+const FOREX_TTL = 300_000; // 5 minutes
+
+export async function getUsdCny(): Promise<number> {
+  if (Date.now() - usdCnyTs < FOREX_TTL) return usdCnyRate;
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/USDCNY=X?range=1d&interval=1d`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) {
+      const json = await res.json();
+      const price = json.chart?.result?.[0]?.meta?.regularMarketPrice;
+      if (price) {
+        usdCnyRate = price;
+        usdCnyTs = Date.now();
+      }
+    }
+  } catch {}
+  return usdCnyRate;
+}
+
 export async function getQuote(symbol: string, market?: string): Promise<Quote | null> {
+  if (market === "forex" || symbol === "USDCNY") {
+    const rate = await getUsdCny();
+    return {
+      symbol: "USDCNY",
+      name: "USD/CNY",
+      market: "forex",
+      price: rate,
+      open: rate,
+      high: rate,
+      low: rate,
+      prevClose: rate,
+      volume: 0,
+      amount: 0,
+      change: 0,
+      changePct: 0,
+    };
+  }
+
   const cacheKey = `${symbol}:${market ?? "auto"}`;
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.quote;

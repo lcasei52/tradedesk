@@ -31,20 +31,6 @@ const MARKET_LABELS: Record<string, string> = {
   crypto: "加密",
 };
 
-function posValue(p: Position, q?: Quote): number {
-  if (p.direction === "long" || p.direction === "short") {
-    return (p.margin ?? 0) + (p.unrealizedPnl ?? 0);
-  }
-  return (q ? q.price : p.costPrice) * p.quantity;
-}
-
-function posCost(p: Position): number {
-  if (p.direction === "long" || p.direction === "short") {
-    return p.margin ?? 0;
-  }
-  return p.costPrice * p.quantity;
-}
-
 const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPanel(_, ref) {
   useImperativeHandle(ref, () => ({ reload: load }));
   const [positions, setPositions] = useState<Position[]>([]);
@@ -52,6 +38,7 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
   const [filter, setFilter] = useState("all");
   const [syncing, setSyncing] = useState(false);
   const [hasExchangeAccounts, setHasExchangeAccounts] = useState(false);
+  const [usdCny, setUsdCny] = useState(7.25);
   const positionsRef = useRef<Position[]>([]);
 
   const fetchQuotes = useCallback((posList: Position[]) => {
@@ -70,13 +57,16 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
           .catch(() => null)
       )
     ).then((results) => {
-      const map = new Map<string, Quote>();
-      for (const r of results) {
-        if (r.status === "fulfilled" && r.value) {
-          map.set(r.value.symbol, { price: r.value.price, changePct: r.value.changePct });
+      // Merge: only update symbols with successful responses, keep old values for failures
+      setQuotes((prev) => {
+        const next = new Map(prev);
+        for (const r of results) {
+          if (r.status === "fulfilled" && r.value) {
+            next.set(r.value.symbol, { price: r.value.price, changePct: r.value.changePct });
+          }
         }
-      }
-      setQuotes(map);
+        return next;
+      });
     });
   }, []);
 
@@ -93,6 +83,12 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
     fetch("/api/exchange-accounts")
       .then((r) => r.json())
       .then((accounts: unknown[]) => setHasExchangeAccounts(accounts.length > 0))
+      .catch(() => {});
+
+    // Fetch USD/CNY rate
+    fetch("/api/quote?symbol=USDCNY&market=forex")
+      .then((r) => r.json())
+      .then((q) => { if (q.price) setUsdCny(q.price); })
       .catch(() => {});
   }, [fetchQuotes]);
 
@@ -116,10 +112,39 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
     }
   };
 
+  const isFutures = (p: Position) => p.direction === "long" || p.direction === "short";
+
+  // For futures: compute effective margin if DB value is 0
+  const effectiveMargin = (p: Position): number => {
+    if (p.margin && p.margin > 0) return p.margin;
+    // Fallback: entryPrice * quantity / leverage
+    const lev = p.leverage || 1;
+    const entry = p.entryPrice ?? p.costPrice;
+    return entry * p.quantity / lev;
+  };
+
   const filtered = filter === "all" ? positions : positions.filter((p) => p.market === filter);
 
-  // Summary: use filtered positions for header display
-  const displayValue = filtered.reduce((s, p) => s + posValue(p, quotes.get(p.symbol)), 0);
+  const posValue = (p: Position): number => {
+    if (isFutures(p)) {
+      return effectiveMargin(p) + (p.unrealizedPnl ?? 0);
+    }
+    const q = quotes.get(p.symbol);
+    const price = q ? q.price : p.costPrice;
+    if (p.market === "crypto") {
+      return price * p.quantity * usdCny;
+    }
+    return price * p.quantity;
+  };
+
+  const posCost = (p: Position): number => {
+    if (isFutures(p)) return effectiveMargin(p);
+    if (p.market === "crypto" && p.costPrice > 0) return p.costPrice * p.quantity * usdCny;
+    if (p.market === "crypto") return 0;
+    return p.costPrice * p.quantity;
+  };
+
+  const displayValue = filtered.reduce((s, p) => s + posValue(p), 0);
   const displayCost = filtered.reduce((s, p) => s + posCost(p), 0);
   const displayProfit = displayValue - displayCost;
   const displayProfitPct = displayCost > 0 ? (displayProfit / displayCost) * 100 : 0;
@@ -184,28 +209,41 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
             const q = quotes.get(pos.symbol);
             const currentPrice = q?.price ?? pos.entryPrice ?? pos.costPrice;
             const changePct = q?.changePct ?? 0;
-            const futures = pos.direction === "long" || pos.direction === "short";
+            const futures = isFutures(pos);
             const isShort = pos.direction === "short";
 
-            // Direction-aware daily change color: short profits when price drops
+            // Direction-aware daily change color
             const dailyIsProfit = isShort ? changePct < 0 : changePct >= 0;
 
             let profit: number;
             let profitPct: number;
             let profitHasCost = true;
+            let displayLine = "";
 
             if (futures) {
+              const margin = effectiveMargin(pos);
               profit = pos.unrealizedPnl ?? 0;
-              const margin = pos.margin ?? 0;
               profitPct = margin > 0 ? (profit / margin) * 100 : 0;
-            } else {
-              profit = (currentPrice - pos.costPrice) * pos.quantity;
+              const entry = pos.entryPrice ?? pos.costPrice;
+              displayLine = `持仓 ${pos.quantity} ${pos.symbol} · 保证金 ${margin.toFixed(2)} USDT · 开仓 ${entry.toFixed(2)} · 现价 ${currentPrice.toFixed(2)}`;
+              if (pos.liquidationPrice && pos.liquidationPrice > 0) {
+                displayLine += ` · 强平 ${pos.liquidationPrice.toFixed(2)}`;
+              }
+            } else if (pos.market === "crypto") {
+              const cnyValue = currentPrice * pos.quantity * usdCny;
               if (pos.costPrice > 0) {
+                profit = (currentPrice - pos.costPrice) * pos.quantity * usdCny;
                 profitPct = ((currentPrice - pos.costPrice) / pos.costPrice) * 100;
               } else {
+                profit = 0;
                 profitPct = 0;
                 profitHasCost = false;
               }
+              displayLine = `${pos.quantity} 枚 · 现价 ${currentPrice.toFixed(2)} USDT (¥${cnyValue.toFixed(2)})`;
+            } else {
+              profit = (currentPrice - pos.costPrice) * pos.quantity;
+              profitPct = pos.costPrice > 0 ? ((currentPrice - pos.costPrice) / pos.costPrice) * 100 : 0;
+              displayLine = `${pos.quantity} 股 · 成本 ${pos.costPrice} · 现价 ${currentPrice.toFixed(4)}`;
             }
 
             const directionLabel = isShort ? "空" : pos.direction === "long" ? "多" : null;
@@ -243,27 +281,14 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
                   {pos.exchangeAccount && <span className="ml-1">({pos.exchangeAccount.name})</span>}
                 </div>
                 <div className="flex justify-between mt-1.5 text-xs">
-                  <span className="text-muted">
-                    {futures ? (
-                      <>
-                        持仓 {pos.quantity} USDT · 保证金 {(pos.margin ?? 0).toFixed(2)}
-                        {pos.liquidationPrice && pos.liquidationPrice > 0 && (
-                          <span className="ml-1 text-loss">强平 {pos.liquidationPrice.toFixed(4)}</span>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        {pos.quantity} {pos.market === "crypto" ? "枚" : "股"} · {pos.costPrice > 0 ? `成本 ${pos.costPrice} · ` : ""}现价 {currentPrice.toFixed(4)}
-                      </>
-                    )}
-                  </span>
+                  <span className="text-muted">{displayLine}</span>
                   <span className={profit >= 0 ? "text-profit" : "text-loss"}>
                     {futures ? (
                       <>{profit >= 0 ? "+" : ""}{profit.toFixed(2)} USDT ({profitPct >= 0 ? "+" : ""}{profitPct.toFixed(2)}%)</>
                     ) : profitHasCost ? (
-                      <>¥{(posValue(pos, q)).toFixed(2)} ({profitPct >= 0 ? "+" : ""}{profitPct.toFixed(2)}%)</>
+                      <>¥{posValue(pos).toFixed(2)} ({profitPct >= 0 ? "+" : ""}{profitPct.toFixed(2)}%)</>
                     ) : (
-                      <>¥{(currentPrice * pos.quantity).toFixed(2)}</>
+                      <>¥{posValue(pos).toFixed(2)}</>
                     )}
                   </span>
                 </div>

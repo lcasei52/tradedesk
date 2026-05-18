@@ -84,17 +84,40 @@ export class BinanceAdapter implements ExchangeAdapter {
       .map((p) => {
         const qty = parseFloat(p.positionAmt);
         const baseAsset = p.symbol.replace(/USDT$/, "");
+        const entryPrice = parseFloat(p.entryPrice);
+        const leverage = parseInt(p.leverage);
+        const quantity = Math.abs(qty);
+        const initialMargin = parseFloat(p.initialMargin);
+        // Fallback margin: if API returns 0, compute from entry/leverage
+        const margin = initialMargin > 0 ? initialMargin : (entryPrice * quantity / leverage);
+
         return {
           symbol: p.symbol,
           baseAsset,
           direction: qty > 0 ? "long" as const : "short" as const,
-          leverage: parseInt(p.leverage),
-          entryPrice: parseFloat(p.entryPrice),
-          quantity: Math.abs(qty),
+          leverage,
+          entryPrice,
+          quantity,
           liquidationPrice: parseFloat(p.liquidationPrice),
           unrealizedPnl: parseFloat(p.unRealizedProfit),
-          margin: parseFloat(p.initialMargin),
+          margin,
         };
       });
+  }
+
+  async getFuturesBalance(): Promise<number> {
+    const params: Record<string, string> = { timestamp: Date.now().toString() };
+    params.signature = sign(params, this.apiSecret);
+    const qs = new URLSearchParams(params).toString();
+
+    const res = await fetch(`${FUTURES_BASE}/fapi/v2/balance?${qs}`, {
+      headers: signedHeaders(this.apiKey),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!res.ok) return 0;
+    const data = await res.json() as { asset: string; balance: string; availableBalance: string }[];
+    const usdt = data.find((b) => b.asset === "USDT");
+    return usdt ? parseFloat(usdt.balance) : 0;
   }
 }
