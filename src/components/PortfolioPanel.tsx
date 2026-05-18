@@ -31,6 +31,20 @@ const MARKET_LABELS: Record<string, string> = {
   crypto: "加密",
 };
 
+function posValue(p: Position, q?: Quote): number {
+  if (p.direction === "long" || p.direction === "short") {
+    return (p.margin ?? 0) + (p.unrealizedPnl ?? 0);
+  }
+  return (q ? q.price : p.costPrice) * p.quantity;
+}
+
+function posCost(p: Position): number {
+  if (p.direction === "long" || p.direction === "short") {
+    return p.margin ?? 0;
+  }
+  return p.costPrice * p.quantity;
+}
+
 const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPanel(_, ref) {
   useImperativeHandle(ref, () => ({ reload: load }));
   const [positions, setPositions] = useState<Position[]>([]);
@@ -102,26 +116,14 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
     }
   };
 
-  const isFutures = (p: Position) => p.direction === "long" || p.direction === "short";
-  const unit = (p: Position) => (p.market === "crypto" ? "枚" : "股");
-
   const filtered = filter === "all" ? positions : positions.filter((p) => p.market === filter);
 
-  // Total value calculation
-  const totalValue = positions.reduce((s, p) => {
-    if (isFutures(p)) {
-      const pnl = p.unrealizedPnl ?? 0;
-      return s + (p.margin ?? 0) + pnl;
-    }
-    const q = quotes.get(p.symbol);
-    return s + (q ? q.price : p.costPrice) * p.quantity;
-  }, 0);
-  const totalCost = positions.reduce((s, p) => {
-    if (isFutures(p)) return s + (p.margin ?? 0);
-    return s + p.costPrice * p.quantity;
-  }, 0);
-  const totalProfit = totalValue - totalCost;
-  const totalProfitPct = totalCost > 0 ? (totalProfit / totalCost) * 100 : 0;
+  // Summary: use filtered positions for header display
+  const displayValue = filtered.reduce((s, p) => s + posValue(p, quotes.get(p.symbol)), 0);
+  const displayCost = filtered.reduce((s, p) => s + posCost(p), 0);
+  const displayProfit = displayValue - displayCost;
+  const displayProfitPct = displayCost > 0 ? (displayProfit / displayCost) * 100 : 0;
+  const headerLabel = filter === "all" ? "总资产" : `${MARKET_LABELS[filter] || filter}资产`;
 
   const handleDelete = async (pos: Position) => {
     if (pos.exchangeAccountId) {
@@ -135,7 +137,7 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
     <div className="flex flex-col h-full">
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between mb-1">
-          <div className="text-xs text-muted">总资产</div>
+          <div className="text-xs text-muted">{headerLabel}</div>
           {hasExchangeAccounts && (
             <button
               onClick={handleSync}
@@ -147,14 +149,14 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
           )}
         </div>
         <div className="text-2xl font-bold">
-          ¥{totalValue.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          ¥{displayValue.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </div>
-        <div className={`text-xs mt-1 ${totalProfit >= 0 ? "text-loss" : "text-profit"}`}>
-          {totalProfit >= 0 ? "+" : ""}{totalProfit.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          ({totalProfitPct >= 0 ? "+" : ""}{totalProfitPct.toFixed(2)}%)
+        <div className={`text-xs mt-1 ${displayProfit >= 0 ? "text-loss" : "text-profit"}`}>
+          {displayProfit >= 0 ? "+" : ""}{displayProfit.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          ({displayProfitPct >= 0 ? "+" : ""}{displayProfitPct.toFixed(2)}%)
         </div>
         <div className="text-xs text-muted mt-0.5">
-          成本 ¥{totalCost.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · {positions.length} 只持仓
+          成本 ¥{displayCost.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · {filtered.length} 只持仓
         </div>
       </div>
 
@@ -182,24 +184,31 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
             const q = quotes.get(pos.symbol);
             const currentPrice = q?.price ?? pos.entryPrice ?? pos.costPrice;
             const changePct = q?.changePct ?? 0;
-            const futures = isFutures(pos);
+            const futures = pos.direction === "long" || pos.direction === "short";
+            const isShort = pos.direction === "short";
+
+            // Direction-aware daily change color: short profits when price drops
+            const dailyIsProfit = isShort ? changePct < 0 : changePct >= 0;
 
             let profit: number;
             let profitPct: number;
-            let displayValue: number;
+            let profitHasCost = true;
 
             if (futures) {
               profit = pos.unrealizedPnl ?? 0;
               const margin = pos.margin ?? 0;
               profitPct = margin > 0 ? (profit / margin) * 100 : 0;
-              displayValue = margin + profit;
             } else {
               profit = (currentPrice - pos.costPrice) * pos.quantity;
-              profitPct = pos.costPrice > 0 ? ((currentPrice - pos.costPrice) / pos.costPrice) * 100 : 0;
-              displayValue = currentPrice * pos.quantity;
+              if (pos.costPrice > 0) {
+                profitPct = ((currentPrice - pos.costPrice) / pos.costPrice) * 100;
+              } else {
+                profitPct = 0;
+                profitHasCost = false;
+              }
             }
 
-            const directionLabel = pos.direction === "long" ? "多" : pos.direction === "short" ? "空" : null;
+            const directionLabel = isShort ? "空" : pos.direction === "long" ? "多" : null;
 
             return (
               <div key={pos.id} className="p-3 border-b border-border hover:bg-border/30 group relative">
@@ -218,7 +227,7 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className={`text-xs font-medium ${changePct >= 0 ? "text-profit" : "text-loss"}`}>
+                    <span className={`text-xs font-medium ${dailyIsProfit ? "text-profit" : "text-loss"}`}>
                       {changePct >= 0 ? "+" : ""}{changePct.toFixed(2)}%
                     </span>
                     <button
@@ -237,22 +246,24 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
                   <span className="text-muted">
                     {futures ? (
                       <>
-                        {pos.quantity} {unit(pos)} · 开仓 {(pos.entryPrice ?? pos.costPrice).toFixed(4)} · 现价 {currentPrice.toFixed(4)}
+                        持仓 {pos.quantity} USDT · 保证金 {(pos.margin ?? 0).toFixed(2)}
                         {pos.liquidationPrice && pos.liquidationPrice > 0 && (
                           <span className="ml-1 text-loss">强平 {pos.liquidationPrice.toFixed(4)}</span>
                         )}
                       </>
                     ) : (
                       <>
-                        {pos.quantity} {unit(pos)} · 成本 {pos.costPrice} · 现价 {currentPrice.toFixed(4)}
+                        {pos.quantity} {pos.market === "crypto" ? "枚" : "股"} · {pos.costPrice > 0 ? `成本 ${pos.costPrice} · ` : ""}现价 {currentPrice.toFixed(4)}
                       </>
                     )}
                   </span>
                   <span className={profit >= 0 ? "text-profit" : "text-loss"}>
                     {futures ? (
                       <>{profit >= 0 ? "+" : ""}{profit.toFixed(2)} USDT ({profitPct >= 0 ? "+" : ""}{profitPct.toFixed(2)}%)</>
+                    ) : profitHasCost ? (
+                      <>¥{(posValue(pos, q)).toFixed(2)} ({profitPct >= 0 ? "+" : ""}{profitPct.toFixed(2)}%)</>
                     ) : (
-                      <>¥{displayValue.toFixed(2)} ({profitPct >= 0 ? "+" : ""}{profitPct.toFixed(2)}%)</>
+                      <>¥{(currentPrice * pos.quantity).toFixed(2)}</>
                     )}
                   </span>
                 </div>
