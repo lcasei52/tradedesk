@@ -89,7 +89,7 @@ export const toolDefinitions = [
   },
   {
     name: "edit_position",
-    description: "修改已有持仓的信息（成本价、名称等），不改变数量和余额。用于用户说'把XX的成本改成Y'、'修改XX的名称'。",
+    description: "修改已有持仓的信息（成本价、名称、所属账户），不改变数量和余额。用于用户说'把XX的成本改成Y'、'修改XX的名称'、'把XX移到招商证券账户'。",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -97,6 +97,7 @@ export const toolDefinitions = [
         market: { type: "string", description: "市场：a_share / hk_stock / us_stock / crypto / fund（可选，用于区分同代码不同市场）" },
         costPrice: { type: "number", description: "新的成本价（可选）" },
         name: { type: "string", description: "新的名称（可选）" },
+        broker_account: { type: "string", description: "移动到的券商账户名称（可选）" },
       },
       required: ["symbol"],
     },
@@ -114,12 +115,14 @@ export const toolDefinitions = [
   },
   {
     name: "manage_broker_account",
-    description: "管理券商账户：查询列表、入金、出金。当用户说'入金X'、'出金X'、'查账户余额'时调用。",
+    description: "管理券商账户：创建、查询列表、入金、出金。当用户说'添加账户'、'入金X'、'出金X'、'查账户余额'时调用。",
     input_schema: {
       type: "object" as const,
       properties: {
-        action: { type: "string", enum: ["list", "deposit", "withdraw"], description: "操作类型" },
-        account_name: { type: "string", description: "账户名称（deposit/withdraw时必填）" },
+        action: { type: "string", enum: ["create", "list", "deposit", "withdraw"], description: "操作类型" },
+        account_name: { type: "string", description: "账户名称（create/deposit/withdraw时必填）" },
+        currency: { type: "string", enum: ["CNY", "USD", "HKD"], description: "币种（create时使用，默认CNY）" },
+        initial_balance: { type: "number", description: "初始余额（create时使用，默认0）" },
         amount: { type: "number", description: "金额（deposit/withdraw时必填）" },
       },
       required: ["action"],
@@ -310,15 +313,24 @@ export async function executeTool(
       }
 
       case "edit_position": {
-        const { symbol, market, costPrice, name } = input as { symbol: string; market?: string; costPrice?: number; name?: string };
+        const { symbol, market, costPrice, name, broker_account } = input as { symbol: string; market?: string; costPrice?: number; name?: string; broker_account?: string };
         const existing = await prisma.position.findFirst({ where: { symbol, ...(market ? { market } : {}), direction: null } });
         if (!existing) return { content: `未找到 ${symbol} 的持仓`, error: true };
         const data: Record<string, unknown> = {};
         if (costPrice !== undefined) data.costPrice = costPrice;
         if (name) data.name = name;
+        if (broker_account) {
+          const acc = await prisma.brokerAccount.findFirst({ where: { name: broker_account } });
+          if (!acc) return { content: `未找到券商账户 "${broker_account}"，请先通过 manage_broker_account 创建`, error: true };
+          data.brokerAccountId = acc.id;
+        }
         if (Object.keys(data).length === 0) return { content: "没有需要修改的字段", error: true };
         await prisma.position.update({ where: { id: existing.id }, data });
-        return { content: `已修改 ${existing.name}(${symbol})：${costPrice !== undefined ? `成本价 → ${costPrice}` : ""}${name ? ` 名称 → ${name}` : ""}` };
+        const changes: string[] = [];
+        if (costPrice !== undefined) changes.push(`成本价 → ${costPrice}`);
+        if (name) changes.push(`名称 → ${name}`);
+        if (broker_account) changes.push(`账户 → ${broker_account}`);
+        return { content: `已修改 ${existing.name}(${symbol})：${changes.join("，")}` };
       }
 
       case "update_cash_balance": {
@@ -330,9 +342,20 @@ export async function executeTool(
       }
 
       case "manage_broker_account": {
-        const { action, account_name, amount } = input as {
-          action: string; account_name?: string; amount?: number;
+        const { action, account_name, amount, currency, initial_balance } = input as {
+          action: string; account_name?: string; amount?: number; currency?: string; initial_balance?: number;
         };
+        if (action === "create") {
+          if (!account_name) return { content: "请提供账户名称", error: true };
+          const cur = currency || "CNY";
+          const existing = await prisma.brokerAccount.findFirst({ where: { name: account_name } });
+          if (existing) return { content: `账户 "${account_name}" 已存在`, error: true };
+          const acc = await prisma.brokerAccount.create({
+            data: { name: account_name, currency: cur, cashBalance: initial_balance || 0 },
+          });
+          const prefix = cur === "CNY" ? "¥" : cur === "USD" ? "$" : "HK$";
+          return { content: `券商账户 "${account_name}" 已创建，币种 ${cur}，余额 ${prefix}${(initial_balance || 0).toFixed(2)}` };
+        }
         if (action === "list") {
           const accounts = await prisma.brokerAccount.findMany({ orderBy: { createdAt: "asc" } });
           if (accounts.length === 0) return { content: "暂无券商账户" };
