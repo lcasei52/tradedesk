@@ -322,7 +322,17 @@ export async function executeTool(
         if (broker_account) {
           const acc = await prisma.brokerAccount.findFirst({ where: { name: broker_account } });
           if (!acc) return { content: `未找到券商账户 "${broker_account}"，请先通过 manage_broker_account 创建`, error: true };
-          data.brokerAccountId = acc.id;
+          const oldAccountId = existing.brokerAccountId;
+          const newAccountId = acc.id;
+          if (oldAccountId !== newAccountId) {
+            data.brokerAccountId = newAccountId;
+            // Transfer cash: refund old account, deduct new account
+            const amount = existing.costPrice * existing.quantity;
+            if (oldAccountId) {
+              await prisma.brokerAccount.update({ where: { id: oldAccountId }, data: { cashBalance: { increment: amount } } });
+            }
+            await prisma.brokerAccount.update({ where: { id: newAccountId }, data: { cashBalance: { increment: -amount } } });
+          }
         }
         if (Object.keys(data).length === 0) return { content: "没有需要修改的字段", error: true };
         await prisma.position.update({ where: { id: existing.id }, data });
@@ -367,10 +377,9 @@ export async function executeTool(
           if (!acc) return { content: `未找到账户 "${account_name}"`, error: true };
           if (amount === undefined || amount <= 0) return { content: "请提供正数金额", error: true };
           const delta = action === "deposit" ? amount : -amount;
-          const newBalance = acc.cashBalance + delta;
-          if (newBalance < 0) return { content: `余额不足（当前 ${acc.currency === "CNY" ? "¥" : acc.currency === "USD" ? "$" : "HK$"}${acc.cashBalance.toFixed(2)}）`, error: true };
-          await prisma.brokerAccount.update({ where: { id: acc.id }, data: { cashBalance: newBalance } });
+          await prisma.brokerAccount.update({ where: { id: acc.id }, data: { cashBalance: { increment: delta } } });
           const prefix = acc.currency === "CNY" ? "¥" : acc.currency === "USD" ? "$" : "HK$";
+          const newBalance = acc.cashBalance + delta;
           return { content: `${acc.name} ${action === "deposit" ? "入金" : "出金"} ${prefix}${amount.toFixed(2)}，当前余额 ${prefix}${newBalance.toFixed(2)}` };
         }
         return { content: `未知操作：${action}`, error: true };

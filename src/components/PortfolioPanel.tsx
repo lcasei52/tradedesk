@@ -468,10 +468,10 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
                 <span>{a.name}</span>
                 <button
                   onClick={() => handleDeposit(a)}
-                  className="text-foreground hover:underline"
+                  className={`hover:underline ${a.cashBalance < 0 ? "text-loss" : "text-foreground"}`}
                 >
-                  {a.cashBalance !== 0 ? `${sym}${a.cashBalance.toFixed(2)}` : "+ 设置余额"}
-                  {a.currency !== "CNY" && a.cashBalance > 0 && (
+                  {a.cashBalance !== 0 ? `${a.cashBalance < 0 ? "" : ""}${sym}${a.cashBalance.toFixed(2)}` : "+ 设置余额"}
+                  {a.currency !== "CNY" && a.cashBalance !== 0 && (
                     <span className="text-muted ml-1">(¥{cny.toFixed(2)})</span>
                   )}
                 </button>
