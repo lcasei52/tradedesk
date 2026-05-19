@@ -90,7 +90,7 @@ export async function DELETE(req: NextRequest) {
 // PUT /api/positions — sell partial: add back cash for sold portion
 export async function PUT(req: NextRequest) {
   const body = await req.json();
-  const { symbol, quantity, costPrice, name, market } = body;
+  const { symbol, quantity, costPrice, name, market, brokerAccountId } = body;
 
   if (!symbol) return NextResponse.json({ error: "symbol required" }, { status: 400 });
 
@@ -116,6 +116,7 @@ export async function PUT(req: NextRequest) {
   if (costPrice !== undefined) data.costPrice = costPrice;
   if (name) data.name = name;
   if (market) data.market = market;
+  if (brokerAccountId !== undefined) data.brokerAccountId = brokerAccountId;
 
   const updated = await prisma.position.update({ where: { id: pos.id }, data });
   return NextResponse.json(updated);

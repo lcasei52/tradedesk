@@ -7,10 +7,11 @@ export async function PATCH(
 ) {
   const { id } = await params;
   const body = await _req.json();
-  const { name } = body as { name?: string };
+  const { name, cashBalance } = body as { name?: string; cashBalance?: number };
 
   const data: Record<string, unknown> = {};
   if (name) data.name = name;
+  if (cashBalance !== undefined) data.cashBalance = cashBalance;
   if (Object.keys(data).length === 0) return NextResponse.json({ error: "没有修改" }, { status: 400 });
 
   const account = await prisma.brokerAccount.update({ where: { id }, data });

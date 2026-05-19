@@ -55,6 +55,83 @@ const CURRENCY_SYMBOL: Record<string, string> = {
   CNY: "¥", USD: "$", HKD: "HK$",
 };
 
+function EditModal({
+  pos,
+  brokerAccounts,
+  onSave,
+  onClose,
+}: {
+  pos: Position;
+  brokerAccounts: BrokerAccountInfo[];
+  onSave: (data: { id: string; symbol?: string; quantity?: number; costPrice?: number; brokerAccountId?: string | null }) => void;
+  onClose: () => void;
+}) {
+  const [symbol, setSymbol] = useState(pos.symbol);
+  const [quantity, setQuantity] = useState(String(pos.quantity));
+  const [costPrice, setCostPrice] = useState(String(pos.costPrice));
+  const [accountId, setAccountId] = useState(pos.brokerAccountId ?? "");
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSave({
+      id: pos.id,
+      symbol: symbol !== pos.symbol ? symbol : undefined,
+      quantity: quantity !== String(pos.quantity) ? Number(quantity) : undefined,
+      costPrice: costPrice !== String(pos.costPrice) ? Number(costPrice) : undefined,
+      brokerAccountId: accountId !== (pos.brokerAccountId ?? "") ? (accountId || null) : undefined,
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="bg-card-bg border border-border rounded-lg p-4 w-80 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-sm font-medium mb-3">{pos.name} ({pos.symbol})</h3>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <label className="block text-xs text-muted mb-1">代码</label>
+            <input
+              type="text" value={symbol} onChange={(e) => setSymbol(e.target.value)}
+              className="w-full px-2 py-1.5 rounded border border-border bg-background text-sm outline-none focus:border-primary"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-muted mb-1">数量</label>
+            <input
+              type="number" step="any" value={quantity} onChange={(e) => setQuantity(e.target.value)}
+              className="w-full px-2 py-1.5 rounded border border-border bg-background text-sm outline-none focus:border-primary"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-muted mb-1">成本价</label>
+            <input
+              type="number" step="any" value={costPrice} onChange={(e) => setCostPrice(e.target.value)}
+              className="w-full px-2 py-1.5 rounded border border-border bg-background text-sm outline-none focus:border-primary"
+            />
+          </div>
+          {!pos.exchangeAccountId && brokerAccounts.length > 0 && (
+            <div>
+              <label className="block text-xs text-muted mb-1">账户</label>
+              <select
+                value={accountId} onChange={(e) => setAccountId(e.target.value)}
+                className="w-full px-2 py-1.5 rounded border border-border bg-card-bg text-sm outline-none focus:border-primary"
+              >
+                <option value="">无账户</option>
+                {brokerAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="flex gap-2 pt-1">
+            <button type="submit" className="flex-1 py-1.5 rounded bg-primary text-white text-sm">保存</button>
+            <button type="button" onClick={onClose} className="flex-1 py-1.5 rounded border border-border text-sm">取消</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPanel(_, ref) {
   useImperativeHandle(ref, () => ({ reload: load }));
   const [positions, setPositions] = useState<Position[]>([]);
@@ -66,6 +143,7 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
   const [brokerAccounts, setBrokerAccounts] = useState<BrokerAccountInfo[]>([]);
   const [usdCny, setUsdCny] = useState(7.25);
   const [hkdCny, setHkdCny] = useState(0.91);
+  const [editingPos, setEditingPos] = useState<Position | null>(null);
   const positionsRef = useRef<Position[]>([]);
 
   const fetchQuotes = useCallback((posList: Position[], isInitial = false) => {
@@ -118,7 +196,6 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
       .then((data: BrokerAccountInfo[]) => setBrokerAccounts(data))
       .catch(() => {});
 
-    // Fetch exchange rates
     fetch("/api/quote?symbol=USDCNY&market=forex")
       .then((r) => r.json())
       .then((q) => { if (q.price) setUsdCny(q.price); })
@@ -214,7 +291,6 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
       }, 0)
     : 0;
 
-  // Broker account cash, filtered by market/currency and converted to CNY
   const brokerCashCny = brokerAccounts
     .filter((a) => {
       if (filter === "all") return true;
@@ -247,22 +323,60 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
     load();
   };
 
-  const handleDeposit = async (account: BrokerAccountInfo) => {
-    const sym = CURRENCY_SYMBOL[account.currency] || "";
-    const v = prompt(`${account.name} 入金/出金金额（正数入金，负数出金）:`, "");
-    if (v === null || isNaN(Number(v))) return;
-    const amount = Number(v);
-    const res = await fetch(`/api/broker-accounts/${account.id}/deposit`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ amount }),
-    });
-    if (res.ok) {
-      load();
-    } else {
-      const data = await res.json();
-      alert(data.error || "操作失败");
+  const handleEditSave = async (data: {
+    id: string; symbol?: string; quantity?: number; costPrice?: number; brokerAccountId?: string | null;
+  }) => {
+    const pos = positions.find((p) => p.id === data.id);
+    if (!pos) return;
+
+    // If broker account changed, transfer cash
+    if (data.brokerAccountId !== undefined && data.brokerAccountId !== pos.brokerAccountId) {
+      const amount = pos.costPrice * pos.quantity;
+      if (pos.brokerAccountId) {
+        await fetch(`/api/broker-accounts/${pos.brokerAccountId}/deposit`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ amount }),
+        });
+      }
+      if (data.brokerAccountId) {
+        await fetch(`/api/broker-accounts/${data.brokerAccountId}/deposit`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ amount: -amount }),
+        });
+      }
     }
+
+    // Update position fields
+    const updateData: Record<string, unknown> = {};
+    if (data.symbol) updateData.symbol = data.symbol;
+    if (data.quantity !== undefined) updateData.quantity = data.quantity;
+    if (data.costPrice !== undefined) updateData.costPrice = data.costPrice;
+    if (data.brokerAccountId !== undefined) updateData.brokerAccountId = data.brokerAccountId;
+
+    if (Object.keys(updateData).length > 0) {
+      await fetch("/api/positions", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: data.symbol || pos.symbol, market: pos.market, ...updateData }),
+      });
+    }
+
+    setEditingPos(null);
+    load();
+  };
+
+  const handleSetBalance = async (account: BrokerAccountInfo) => {
+    const sym = CURRENCY_SYMBOL[account.currency] || "";
+    const v = prompt(`${account.name} 新余额:`, String(account.cashBalance));
+    if (v === null || isNaN(Number(v))) return;
+    await fetch(`/api/broker-accounts/${account.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cashBalance: Number(v) }),
+    });
+    load();
   };
 
   return (
@@ -376,8 +490,16 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
                       {!hasQuote && !futures ? "--" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`}
                     </span>
                     <button
+                      onClick={() => setEditingPos(pos)}
+                      className="opacity-0 group-hover:opacity-100 text-xs text-muted hover:text-primary transition-opacity"
+                      title="编辑"
+                    >
+                      ✎
+                    </button>
+                    <button
                       onClick={() => handleDelete(pos)}
                       className="opacity-0 group-hover:opacity-100 text-xs text-muted hover:text-profit transition-opacity"
+                      title="删除"
                     >
                       ✕
                     </button>
@@ -433,6 +555,16 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
         )}
       </div>
 
+      {/* Edit modal */}
+      {editingPos && (
+        <EditModal
+          pos={editingPos}
+          brokerAccounts={brokerAccounts}
+          onSave={handleEditSave}
+          onClose={() => setEditingPos(null)}
+        />
+      )}
+
       {/* Account balances */}
       <div className="px-3 py-2 border-t border-border text-xs text-muted space-y-1">
         {(filter === "all" || filter === "crypto") && exchangeAccounts.map((a) => {
@@ -467,11 +599,11 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
               <div key={a.id} className="flex justify-between items-center">
                 <span>{a.name}</span>
                 <button
-                  onClick={() => handleDeposit(a)}
+                  onClick={() => handleSetBalance(a)}
                   className={`hover:underline ${a.cashBalance < 0 ? "text-loss" : "text-foreground"}`}
                 >
-                  {a.cashBalance !== 0 ? `${a.cashBalance < 0 ? "" : ""}${sym}${a.cashBalance.toFixed(2)}` : "+ 设置余额"}
-                  {a.currency !== "CNY" && a.cashBalance !== 0 && (
+                  {sym}{a.cashBalance.toFixed(2)}
+                  {a.currency !== "CNY" && (
                     <span className="text-muted ml-1">(¥{cny.toFixed(2)})</span>
                   )}
                 </button>
@@ -483,7 +615,6 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
       <div className="p-3 border-t border-border">
         <button
           onClick={() => {
-            // Build account options
             const accOptions = brokerAccounts.length > 0
               ? "\n可用账户: " + brokerAccounts.map((a) => a.name).join(" / ")
               : "";
@@ -496,7 +627,6 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
             const [symbol, name, market, qty, cost, accountName] = parts;
             if (!symbol || !name || !market || !qty || !cost) return;
 
-            // Find broker account by name if provided
             const brokerId = accountName
               ? brokerAccounts.find((a) => a.name === accountName)?.id
               : brokerAccounts.find((a) => {
