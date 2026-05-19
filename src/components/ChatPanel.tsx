@@ -47,6 +47,20 @@ function parseSSE(text: string): { event: string; data: unknown }[] {
   return events;
 }
 
+const TOOL_LABELS: Record<string, string> = {
+  get_quote: "查行情", get_portfolio: "看持仓",
+  update_position: "改持仓", edit_position: "改持仓",
+  push_daily_report: "推日报", sync_crypto: "同步交易所",
+  manage_conversation: "管理对话", update_cash_balance: "改余额",
+  get_account_balances: "查余额", get_snapshots: "查趋势",
+  manage_exchange_account: "管理账号",
+};
+
+const STATE_TOOLS = new Set([
+  "update_position", "edit_position", "update_cash_balance",
+  "sync_crypto", "manage_exchange_account",
+]);
+
 export default function ChatPanel({ onPositionChange }: { onPositionChange?: () => void }) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -170,7 +184,7 @@ export default function ChatPanel({ onPositionChange }: { onPositionChange?: () 
 
     let assistantContent = "";
     const toolSteps: ToolStep[] = [];
-    let hadPositionUpdate = false;
+    let hadStateChange = false;
 
     try {
       const res = await fetch("/api/chat", {
@@ -219,7 +233,7 @@ export default function ChatPanel({ onPositionChange }: { onPositionChange?: () 
               last.error = d.error as boolean;
             }
             setActiveTools([...toolSteps]);
-            if ((d.tool as string) === "update_position") hadPositionUpdate = true;
+            if (STATE_TOOLS.has(d.tool as string)) hadStateChange = true;
           } else if (event === "error") {
             assistantContent += `\n\n错误：${d.message}`;
             setStreamingText(assistantContent);
@@ -249,7 +263,7 @@ export default function ChatPanel({ onPositionChange }: { onPositionChange?: () 
     // Refresh conversation list (title may have changed)
     loadConversations();
 
-    if (hadPositionUpdate && onPositionChange) {
+    if (hadStateChange && onPositionChange) {
       setTimeout(() => onPositionChange(), 300);
     }
   }, [input, loading, history, activeId, onPositionChange, loadConversations]);
@@ -363,9 +377,7 @@ export default function ChatPanel({ onPositionChange }: { onPositionChange?: () 
                   {msg.toolSteps.map((step, j) => (
                     <div key={j} className="text-xs text-muted">
                       <span className="font-medium">
-                        {step.tool === "get_quote" && "查行情"}
-                        {step.tool === "get_portfolio" && "看持仓"}
-                        {step.tool === "update_position" && "改持仓"}
+                        {TOOL_LABELS[step.tool] || step.tool}
                       </span>
                       {step.result && (
                         <span className={step.error ? "text-loss" : "text-profit"}> — {step.error ? "失败" : "完成"}</span>
@@ -391,9 +403,7 @@ export default function ChatPanel({ onPositionChange }: { onPositionChange?: () 
                         <span className="inline-block w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                       )}
                       <span className="font-medium">
-                        {step.tool === "get_quote" && "查询行情..."}
-                        {step.tool === "get_portfolio" && "获取持仓..."}
-                        {step.tool === "update_position" && "更新持仓..."}
+                        {TOOL_LABELS[step.tool] || step.tool}
                       </span>
                       {step.result && (
                         <span className={step.error ? "text-loss" : "text-profit"}>

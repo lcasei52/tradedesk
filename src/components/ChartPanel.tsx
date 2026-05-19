@@ -30,6 +30,9 @@ export default function ChartPanel() {
   const [view, setView] = useState<"assets" | "change">("assets");
 
   const load = useCallback(async () => {
+    // Auto-save today's snapshot
+    fetch("/api/snapshots", { method: "POST" }).catch(() => {});
+
     const days = range === 0 ? 9999 : range;
     const res = await fetch(`/api/snapshots?days=${days}`);
     if (res.ok) setData(await res.json());

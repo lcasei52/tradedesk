@@ -48,7 +48,9 @@ export class BinanceAdapter implements ExchangeAdapter {
     });
 
     if (!res.ok) throw new Error(`Binance spot error: ${res.status}`);
-    const data = await res.json();
+    const text = await res.text();
+    if (!text) return [];
+    const data = JSON.parse(text);
 
     return (data.balances as { asset: string; free: string; locked: string }[])
       .filter((b) => parseFloat(b.free) > 0 || parseFloat(b.locked) > 0)
@@ -69,7 +71,9 @@ export class BinanceAdapter implements ExchangeAdapter {
     });
 
     if (!res.ok) throw new Error(`Binance futures error: ${res.status}`);
-    const data = await res.json();
+    const text = await res.text();
+    if (!text) return [];
+    const data = JSON.parse(text);
 
     return (data as {
       symbol: string;
@@ -78,7 +82,9 @@ export class BinanceAdapter implements ExchangeAdapter {
       leverage: string;
       liquidationPrice: string;
       unRealizedProfit: string;
-      initialMargin: string;
+      isolatedWallet: string;
+      isolatedMargin: string;
+      notional: string;
     }[])
       .filter((p) => parseFloat(p.positionAmt) !== 0)
       .map((p) => {
@@ -87,9 +93,12 @@ export class BinanceAdapter implements ExchangeAdapter {
         const entryPrice = parseFloat(p.entryPrice);
         const leverage = parseInt(p.leverage);
         const quantity = Math.abs(qty);
-        const initialMargin = parseFloat(p.initialMargin);
-        // Fallback margin: if API returns 0, compute from entry/leverage
-        const margin = initialMargin > 0 ? initialMargin : (entryPrice * quantity / leverage);
+        // isolatedWallet = actual margin balance (includes manually added margin)
+        const isolatedWallet = parseFloat(p.isolatedWallet);
+        const isolatedMargin = parseFloat(p.isolatedMargin);
+        const margin = isolatedWallet > 0 ? isolatedWallet
+          : isolatedMargin > 0 ? isolatedMargin
+          : (entryPrice * quantity / leverage);
 
         return {
           symbol: p.symbol,
@@ -106,18 +115,48 @@ export class BinanceAdapter implements ExchangeAdapter {
   }
 
   async getFuturesBalance(): Promise<number> {
-    const params: Record<string, string> = { timestamp: Date.now().toString() };
-    params.signature = sign(params, this.apiSecret);
-    const qs = new URLSearchParams(params).toString();
+    try {
+      const params: Record<string, string> = { timestamp: Date.now().toString() };
+      params.signature = sign(params, this.apiSecret);
+      const qs = new URLSearchParams(params).toString();
 
-    const res = await fetch(`${FUTURES_BASE}/fapi/v2/balance?${qs}`, {
-      headers: signedHeaders(this.apiKey),
-      signal: AbortSignal.timeout(15000),
-    });
+      const res = await fetch(`${FUTURES_BASE}/fapi/v2/balance?${qs}`, {
+        headers: signedHeaders(this.apiKey),
+        signal: AbortSignal.timeout(15000),
+      });
 
-    if (!res.ok) return 0;
-    const data = await res.json() as { asset: string; balance: string; availableBalance: string }[];
-    const usdt = data.find((b) => b.asset === "USDT");
-    return usdt ? parseFloat(usdt.balance) : 0;
+      if (!res.ok) return 0;
+      const text = await res.text();
+      if (!text) return 0;
+      const data = JSON.parse(text) as { asset: string; balance: string; availableBalance: string }[];
+      const usdt = data.find((b) => b.asset === "USDT");
+      return usdt ? parseFloat(usdt.balance) : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async getFundingBalance(): Promise<number> {
+    try {
+      const params: Record<string, string> = { timestamp: Date.now().toString() };
+      params.signature = sign(params, this.apiSecret);
+      const qs = new URLSearchParams(params).toString();
+
+      const res = await fetch(`${SPOT_BASE}/sapi/v1/asset/get-funding-asset?${qs}`, {
+        method: "POST",
+        headers: signedHeaders(this.apiKey),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!res.ok) return 0;
+      const text = await res.text();
+      if (!text) return 0;
+      const data = JSON.parse(text) as { asset: string; free: string; locked: string }[];
+      if (!Array.isArray(data)) return 0;
+      const usdt = data.find((b) => b.asset === "USDT");
+      return usdt ? parseFloat(usdt.free) + parseFloat(usdt.locked) : 0;
+    } catch {
+      return 0;
+    }
   }
 }

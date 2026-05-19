@@ -16,6 +16,9 @@ export async function GET() {
       apiKey: a.apiKey.slice(0, 4) + "****" + a.apiKey.slice(-4),
       apiSecret: "****",
       isDemo: a.isDemo,
+      futuresBalance: a.futuresBalance,
+      spotBalance: a.spotBalance,
+      fundingBalance: a.fundingBalance,
       createdAt: a.createdAt,
     }))
   );

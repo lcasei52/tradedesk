@@ -34,6 +34,11 @@ export async function POST(req: NextRequest) {
     })
   );
 
+  const toolCtx = {
+    conversationId: conversationId as string | undefined,
+    appUrl: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+  };
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -92,7 +97,7 @@ export async function POST(req: NextRequest) {
               input: toolCall.input,
             });
 
-            const result = await executeTool(toolCall.name, toolCall.input as Record<string, unknown>);
+            const result = await executeTool(toolCall.name, toolCall.input as Record<string, unknown>, toolCtx);
 
             send("tool_end", {
               tool: toolCall.name,

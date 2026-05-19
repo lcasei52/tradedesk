@@ -33,3 +33,18 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json(data);
 }
+
+// POST /api/snapshots — auto-save today's snapshot if not exists
+export async function POST() {
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const existing = await prisma.dailySnapshot.findUnique({ where: { date: dateStr } });
+  if (existing) {
+    return NextResponse.json({ ok: true, created: false });
+  }
+
+  // Dynamically import to avoid circular deps
+  const { saveDailySnapshot } = await import("@/lib/report");
+  await saveDailySnapshot();
+
+  return NextResponse.json({ ok: true, created: true });
+}

@@ -15,6 +15,7 @@ const CRYPTO_NAMES: Record<string, string> = {
 
 // POST /api/exchange/sync — sync all exchange accounts
 export async function POST() {
+  try {
   const accounts = await prisma.exchangeAccount.findMany();
 
   if (accounts.length === 0) {
@@ -38,8 +39,12 @@ export async function POST() {
       });
 
       // Sync spot balances
+      let spotUsdt = 0;
       try {
         const balances = await adapter.getSpotBalances();
+        // Capture USDT spot balance
+        const usdtBal = balances.find((b) => b.asset === "USDT");
+        spotUsdt = usdtBal ? usdtBal.quantity : 0;
         // Only sync non-dust balances (filter out stablecoins too)
         const significant = balances.filter(
           (b) => b.quantity > 0.001 && !["USDT", "BUSD", "USDC", "FDUSD"].includes(b.asset)
@@ -94,6 +99,22 @@ export async function POST() {
       try {
         result.futuresBalance = await adapter.getFuturesBalance();
       } catch {}
+
+      // Fetch funding wallet balance
+      let fundingUsdt = 0;
+      try {
+        fundingUsdt = await adapter.getFundingBalance();
+      } catch {}
+
+      // Persist balances to account
+      await prisma.exchangeAccount.update({
+        where: { id: account.id },
+        data: {
+          futuresBalance: result.futuresBalance,
+          spotBalance: spotUsdt,
+          fundingBalance: fundingUsdt,
+        },
+      });
     } else {
       result.errors.push(`${account.exchange} 暂不支持自动同步`);
     }
@@ -102,4 +123,8 @@ export async function POST() {
   }
 
   return NextResponse.json({ results });
+  } catch (err) {
+    console.error("Sync error:", err);
+    return NextResponse.json({ error: String(err) }, { status: 500 });
+  }
 }
