@@ -3,6 +3,7 @@ import { getEastmoneyQuote } from "./eastmoney";
 import { getYahooQuote } from "./yahoo";
 import { getBinanceQuote } from "./binance";
 import { getCoinGeckoQuote } from "./coingecko";
+import { getFundQuote } from "./fund";
 
 // Simple in-memory cache: symbol -> { quote, timestamp }
 const cache = new Map<string, { quote: Quote; ts: number }>();
@@ -11,12 +12,14 @@ const CACHE_TTL = 10_000; // 10s
 // USD/CNY rate cache
 let usdCnyRate = 7.25;
 let usdCnyTs = 0;
+// HKD/CNY rate cache
+let hkdCnyRate = 0.91;
+let hkdCnyTs = 0;
 const FOREX_TTL = 300_000; // 5 minutes
 
-export async function getUsdCny(): Promise<number> {
-  if (Date.now() - usdCnyTs < FOREX_TTL) return usdCnyRate;
+async function fetchYahooForex(pair: string): Promise<number | null> {
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/USDCNY=X?range=1d&interval=1d`;
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${pair}=X?range=1d&interval=1d`;
     const res = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0" },
       signal: AbortSignal.timeout(8000),
@@ -24,31 +27,41 @@ export async function getUsdCny(): Promise<number> {
     if (res.ok) {
       const json = await res.json();
       const price = json.chart?.result?.[0]?.meta?.regularMarketPrice;
-      if (price) {
-        usdCnyRate = price;
-        usdCnyTs = Date.now();
-      }
+      if (price) return price;
     }
   } catch {}
+  return null;
+}
+
+export async function getUsdCny(): Promise<number> {
+  if (Date.now() - usdCnyTs < FOREX_TTL) return usdCnyRate;
+  const price = await fetchYahooForex("USDCNY");
+  if (price) { usdCnyRate = price; usdCnyTs = Date.now(); }
   return usdCnyRate;
 }
 
+export async function getHkdCny(): Promise<number> {
+  if (Date.now() - hkdCnyTs < FOREX_TTL) return hkdCnyRate;
+  const price = await fetchYahooForex("HKDCNY");
+  if (price) { hkdCnyRate = price; hkdCnyTs = Date.now(); }
+  return hkdCnyRate;
+}
+
 export async function getQuote(symbol: string, market?: string): Promise<Quote | null> {
-  if (market === "forex" || symbol === "USDCNY") {
+  if (market === "forex" || symbol === "USDCNY" || symbol === "HKDCNY") {
+    if (symbol === "HKDCNY") {
+      const rate = await getHkdCny();
+      return {
+        symbol: "HKDCNY", name: "HKD/CNY", market: "forex", price: rate,
+        open: rate, high: rate, low: rate, prevClose: rate,
+        volume: 0, amount: 0, change: 0, changePct: 0,
+      };
+    }
     const rate = await getUsdCny();
     return {
-      symbol: "USDCNY",
-      name: "USD/CNY",
-      market: "forex",
-      price: rate,
-      open: rate,
-      high: rate,
-      low: rate,
-      prevClose: rate,
-      volume: 0,
-      amount: 0,
-      change: 0,
-      changePct: 0,
+      symbol: "USDCNY", name: "USD/CNY", market: "forex", price: rate,
+      open: rate, high: rate, low: rate, prevClose: rate,
+      volume: 0, amount: 0, change: 0, changePct: 0,
     };
   }
 
@@ -70,6 +83,8 @@ async function fetchQuote(symbol: string, market?: string): Promise<Quote | null
     case "crypto":
       // Binance first (more precise), CoinGecko fallback (works from China)
       return (await getBinanceQuote(symbol)) || (await getCoinGeckoQuote(symbol));
+    case "fund":
+      return getFundQuote(symbol);
     case "hk_stock":
     case "us_stock":
       // Try Yahoo first, fallback not available for these markets

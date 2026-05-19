@@ -16,10 +16,28 @@ interface ExchangeAccount {
   isDemo: boolean;
 }
 
+interface BrokerAccount {
+  id: string;
+  name: string;
+  currency: string;
+  cashBalance: number;
+  positionCount: number;
+}
+
 const EXCHANGE_LABELS: Record<string, string> = {
   binance: "Binance",
   okx: "OKX",
   gate: "Gate.io",
+};
+
+const CURRENCY_LABELS: Record<string, string> = {
+  CNY: "人民币 (CNY)",
+  USD: "美元 (USD)",
+  HKD: "港币 (HKD)",
+};
+
+const CURRENCY_SYMBOL: Record<string, string> = {
+  CNY: "¥", USD: "$", HKD: "HK$",
 };
 
 function ExchangeAccounts() {
@@ -149,6 +167,138 @@ function ExchangeAccounts() {
   );
 }
 
+function BrokerAccounts() {
+  const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ name: "", currency: "CNY", initialBalance: "" });
+
+  const load = useCallback(async () => {
+    const res = await fetch("/api/broker-accounts");
+    if (res.ok) setAccounts(await res.json());
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleAdd = async () => {
+    if (!form.name) return;
+    await fetch("/api/broker-accounts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: form.name,
+        currency: form.currency,
+        initialBalance: form.initialBalance ? Number(form.initialBalance) : 0,
+      }),
+    });
+    setShowForm(false);
+    setForm({ name: "", currency: "CNY", initialBalance: "" });
+    await load();
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("删除账户？关联的持仓不会被删除，但会失去账户关联。")) return;
+    await fetch(`/api/broker-accounts/${id}`, { method: "DELETE" });
+    await load();
+  };
+
+  const handleDeposit = async (acc: BrokerAccount) => {
+    const sym = CURRENCY_SYMBOL[acc.currency] || "";
+    const v = prompt(`${acc.name} 入金/出金（正数入金，负数出金）:`, "");
+    if (v === null || isNaN(Number(v))) return;
+    const amount = Number(v);
+    const res = await fetch(`/api/broker-accounts/${acc.id}/deposit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount }),
+    });
+    if (res.ok) {
+      await load();
+    } else {
+      const data = await res.json();
+      alert(data.error || "操作失败");
+    }
+  };
+
+  return (
+    <div>
+      {accounts.length > 0 ? (
+        <div className="space-y-2 mb-4">
+          {accounts.map((acc) => (
+            <div key={acc.id} className="flex items-center justify-between px-3 py-2 rounded-lg border border-border bg-card-bg">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">{acc.name}</span>
+                <span className="text-xs text-muted">{CURRENCY_LABELS[acc.currency] || acc.currency}</span>
+                <button
+                  onClick={() => handleDeposit(acc)}
+                  className="text-xs text-foreground hover:underline"
+                >
+                  {CURRENCY_SYMBOL[acc.currency]}{acc.cashBalance.toFixed(2)}
+                </button>
+                <span className="text-xs text-muted">{acc.positionCount} 只持仓</span>
+              </div>
+              <button
+                onClick={() => handleDelete(acc.id)}
+                className="text-xs text-muted hover:text-loss transition-colors"
+              >
+                删除
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-muted mb-4">暂无券商账户</p>
+      )}
+
+      {showForm ? (
+        <div className="space-y-3 p-4 rounded-lg border border-border bg-card-bg">
+          <input
+            type="text"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            placeholder="账户名称（如：招商证券）"
+            className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm outline-none focus:border-primary"
+          />
+          <select
+            value={form.currency}
+            onChange={(e) => setForm({ ...form, currency: e.target.value })}
+            className="w-full px-3 py-2 rounded-lg border border-border bg-card-bg text-sm outline-none focus:border-primary"
+          >
+            <option value="CNY">人民币 (CNY) — A股/基金</option>
+            <option value="USD">美元 (USD) — 美股</option>
+            <option value="HKD">港币 (HKD) — 港股</option>
+          </select>
+          <input
+            type="number"
+            value={form.initialBalance}
+            onChange={(e) => setForm({ ...form, initialBalance: e.target.value })}
+            placeholder="初始余额（可选）"
+            className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm outline-none focus:border-primary"
+          />
+          <div className="flex gap-2">
+            <button
+              onClick={handleAdd}
+              disabled={!form.name}
+              className="px-4 py-2 rounded-lg bg-primary text-white text-sm disabled:opacity-40"
+            >
+              添加
+            </button>
+            <button onClick={() => setShowForm(false)} className="px-4 py-2 rounded-lg border border-border text-sm">
+              取消
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => setShowForm(true)}
+          className="px-4 py-2 text-sm rounded-lg border border-dashed border-border text-muted hover:border-primary hover:text-primary transition-colors"
+        >
+          + 添加券商账户
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const router = useRouter();
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -176,7 +326,7 @@ export default function SettingsPage() {
     setSaved(false);
 
     try {
-      const body: Record<string, Record<string, string>> = {};
+      const body: Record<string, unknown> = {};
 
       body.llm = {
         baseUrl: settings.llm.baseUrl,
@@ -306,6 +456,12 @@ export default function SettingsPage() {
               测试推送
             </button>
           </div>
+        </section>
+
+        {/* Broker Accounts */}
+        <section className="mb-8">
+          <h2 className="text-base font-medium mb-4 pb-2 border-b border-border">券商账户</h2>
+          <BrokerAccounts />
         </section>
 
         {/* Exchange Accounts */}

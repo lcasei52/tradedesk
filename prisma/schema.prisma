@@ -11,7 +11,7 @@ model Position {
   id               String   @id @default(cuid())
   symbol           String   // "510210", "AAPL", "BTC"
   name             String
-  market           String   // "a_share" | "hk_stock" | "us_stock" | "crypto"
+  market           String   // "a_share" | "hk_stock" | "us_stock" | "crypto" | "fund"
   quantity         Float
   costPrice        Float
   direction        String?  // "long" | "short" (合约空单)
@@ -21,12 +21,14 @@ model Position {
   unrealizedPnl    Float?   // 未实现盈亏
   entryPrice       Float?   // 入场价（合约）
   exchangeAccountId String? // 关联交易所账号，null=手动录入
+  brokerAccountId  String? // 关联券商账户
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   exchangeAccount  ExchangeAccount? @relation(fields: [exchangeAccountId], references: [id])
+  brokerAccount    BrokerAccount?   @relation(fields: [brokerAccountId], references: [id])
 
-  @@unique([symbol, direction])
+  @@unique([symbol, market, direction, brokerAccountId])
 }
 
 model DailySnapshot {
@@ -52,14 +54,28 @@ model Settings {
 }
 
 model ExchangeAccount {
-  id        String   @id @default(cuid())
-  name      String   // 用户自定义名称，如"币安主号"
-  exchange  String   // "binance" | "okx" | "gate"
-  apiKey    String
-  apiSecret String
-  isDemo    Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(cuid())
+  name           String   // 用户自定义名称，如"币安主号"
+  exchange       String   // "binance" | "okx" | "gate"
+  apiKey         String
+  apiSecret      String
+  isDemo         Boolean  @default(false)
+  futuresBalance Float    @default(0) // 合约钱包余额 (USDT)
+  spotBalance    Float    @default(0) // 现货 USDT 余额
+  fundingBalance Float    @default(0) // 资金账户余额 (USDT)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  positions Position[]
+}
+
+model BrokerAccount {
+  id          String   @id @default(cuid())
+  name        String   // "招商证券"
+  currency    String   @default("CNY") // "CNY" | "HKD" | "USD"
+  cashBalance Float    @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   positions Position[]
 }

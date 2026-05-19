@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { getQuote } from "@/lib/market";
+import { getQuote, getUsdCny, getHkdCny } from "@/lib/market";
 import { getLLMConfig } from "@/lib/config";
 import Anthropic from "@anthropic-ai/sdk";
 
@@ -22,6 +22,7 @@ const MARKET_LABEL: Record<string, string> = {
   hk_stock: "港股",
   us_stock: "美股",
   crypto: "加密",
+  fund: "基金",
 };
 
 interface ReportData {
@@ -65,11 +66,32 @@ async function collectData(): Promise<ReportData> {
     })
   );
 
-  const totalCost = positions.reduce((s, p) => s + posCost(p), 0);
+  // Include exchange balances and broker account cash
+  const [usdCny, hkdCny, exchangeAccounts, brokerAccounts] = await Promise.all([
+    getUsdCny(),
+    getHkdCny(),
+    prisma.exchangeAccount.findMany(),
+    prisma.brokerAccount.findMany(),
+  ]);
+  // Futures balance includes margin already counted in posValue — only add unused portion
+  const futuresMarginSum = positions.filter(isFutures).reduce((s, p) => s + (p.margin ?? 0), 0);
+  const exchangeBalCny = exchangeAccounts.reduce(
+    (s, a) => {
+      const unusedFutures = Math.max((a.futuresBalance || 0) - futuresMarginSum, 0);
+      return s + (unusedFutures + (a.spotBalance || 0) + (a.fundingBalance || 0)) * usdCny;
+    }, 0
+  );
+  const brokerCashCny = brokerAccounts.reduce((s, a) => {
+    if (a.currency === "USD") return s + a.cashBalance * usdCny;
+    if (a.currency === "HKD") return s + a.cashBalance * hkdCny;
+    return s + a.cashBalance;
+  }, 0);
+
+  const totalCost = positions.reduce((s, p) => s + posCost(p), 0) + exchangeBalCny + brokerCashCny;
   const totalValue = positions.reduce(
     (s, p) => s + posValue(p, quotes.get(p.symbol)?.price),
     0
-  );
+  ) + exchangeBalCny + brokerCashCny;
   const totalProfit = totalValue - totalCost;
   const totalProfitPct = totalCost > 0 ? (totalProfit / totalCost) * 100 : 0;
 
@@ -211,10 +233,13 @@ function buildMarkdownReport(data: ReportData): string {
         const changeIcon = changePct >= 0 ? "🔺" : "🔻";
         const profitIcon = profit >= 0 ? "🔴" : "🟢";
 
+        const unitLabel = pos.market === "fund" ? "份" : pos.market === "crypto" ? "枚" : "股";
+        const valueLabel = pos.market === "fund" ? "净值" : "市值";
+
         lines.push(
           `  ${pos.name} (${pos.symbol})`,
           `    ${changeIcon} ${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%  ${profitIcon} ${profitPct >= 0 ? "+" : ""}${profitPct.toFixed(2)}%  占比 ${allocPct.toFixed(1)}%`,
-          `    市值 ¥${mv.toFixed(0)} · 数量 ${pos.quantity}`,
+          `    ${valueLabel} ¥${mv.toFixed(0)} · ${unitLabel} ${pos.quantity}`,
           ``
         );
       }
