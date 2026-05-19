@@ -24,6 +24,7 @@ interface Position {
 interface Quote {
   price: number;
   changePct: number;
+  change: number;
 }
 
 const MARKET_LABELS: Record<string, string> = {
@@ -132,6 +133,146 @@ function EditModal({
   );
 }
 
+function AccountManageModal({
+  accounts,
+  actions,
+  onClose,
+}: {
+  accounts: BrokerAccountInfo[];
+  actions: {
+    create: (name: string, currency: string, initialBalance: number) => Promise<void>;
+    rename: (id: string, name: string) => Promise<void>;
+    setBalance: (id: string, cashBalance: number) => Promise<void>;
+    delete: (id: string) => Promise<void>;
+  };
+  onClose: () => void;
+}) {
+  const [newName, setNewName] = useState("");
+  const [newCurrency, setNewCurrency] = useState("CNY");
+  const [newBalance, setNewBalance] = useState("0");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [balanceId, setBalanceId] = useState<string | null>(null);
+  const [editBalance, setEditBalance] = useState("");
+
+  const handleCreate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newName.trim()) return;
+    actions.create(newName.trim(), newCurrency, Number(newBalance) || 0).then(() => {
+      setNewName("");
+      setNewBalance("0");
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="bg-card-bg border border-border rounded-lg p-4 w-96 max-h-[80vh] overflow-y-auto shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="text-sm font-medium">账户管理</h3>
+          <button onClick={onClose} className="text-xs text-muted hover:text-foreground">✕</button>
+        </div>
+
+        {/* Account list */}
+        {accounts.length === 0 ? (
+          <div className="text-xs text-muted text-center py-3">暂无账户</div>
+        ) : (
+          <div className="space-y-2 mb-4">
+            {accounts.map((a) => (
+              <div key={a.id} className="border border-border rounded p-2.5 text-xs">
+                <div className="flex items-center justify-between">
+                  {editingId === a.id ? (
+                    <div className="flex items-center gap-1 flex-1">
+                      <input
+                        value={editName} onChange={(e) => setEditName(e.target.value)}
+                        className="flex-1 px-1.5 py-1 rounded border border-border bg-background text-xs outline-none"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && editName.trim()) {
+                            actions.rename(a.id, editName.trim()).then(() => setEditingId(null));
+                          }
+                        }}
+                        autoFocus
+                      />
+                      <button onClick={() => { if (editName.trim()) actions.rename(a.id, editName.trim()).then(() => setEditingId(null)); }} className="text-primary">✓</button>
+                      <button onClick={() => setEditingId(null)} className="text-muted">✕</button>
+                    </div>
+                  ) : (
+                    <span
+                      className="font-medium cursor-pointer hover:text-primary"
+                      onClick={() => { setEditingId(a.id); setEditName(a.name); }}
+                    >
+                      {a.name} <span className="text-muted font-normal">({a.currency})</span>
+                    </span>
+                  )}
+                  <button
+                    onClick={() => { if (confirm(`删除 ${a.name}？持仓会被解除关联。`)) actions.delete(a.id); }}
+                    className="text-muted hover:text-loss ml-2"
+                  >
+                    删除
+                  </button>
+                </div>
+                <div className="flex items-center justify-between mt-1.5">
+                  <span className="text-muted">余额</span>
+                  {balanceId === a.id ? (
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number" step="any"
+                        value={editBalance} onChange={(e) => setEditBalance(e.target.value)}
+                        className="w-24 px-1.5 py-1 rounded border border-border bg-background text-xs outline-none text-right"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !isNaN(Number(editBalance))) {
+                            actions.setBalance(a.id, Number(editBalance)).then(() => setBalanceId(null));
+                          }
+                        }}
+                        autoFocus
+                      />
+                      <button onClick={() => { if (!isNaN(Number(editBalance))) actions.setBalance(a.id, Number(editBalance)).then(() => setBalanceId(null)); }} className="text-primary">✓</button>
+                      <button onClick={() => setBalanceId(null)} className="text-muted">✕</button>
+                    </div>
+                  ) : (
+                    <span
+                      className={`cursor-pointer hover:text-primary ${a.cashBalance < 0 ? "text-loss" : "text-foreground"}`}
+                      onClick={() => { setBalanceId(a.id); setEditBalance(parseFloat(a.cashBalance.toFixed(2)).toString()); }}
+                    >
+                      {CURRENCY_SYMBOL[a.currency]}{a.cashBalance.toFixed(2)}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Create new account */}
+        <form onSubmit={handleCreate} className="border-t border-border pt-3 space-y-2">
+          <div className="text-xs text-muted">新建账户</div>
+          <input
+            value={newName} onChange={(e) => setNewName(e.target.value)}
+            placeholder="账户名称"
+            className="w-full px-2 py-1.5 rounded border border-border bg-background text-xs outline-none focus:border-primary"
+          />
+          <div className="flex gap-2">
+            <select
+              value={newCurrency} onChange={(e) => setNewCurrency(e.target.value)}
+              className="px-2 py-1.5 rounded border border-border bg-card-bg text-xs outline-none"
+            >
+              <option value="CNY">CNY</option>
+              <option value="USD">USD</option>
+              <option value="HKD">HKD</option>
+            </select>
+            <input
+              type="number" step="any"
+              value={newBalance} onChange={(e) => setNewBalance(e.target.value)}
+              placeholder="初始余额"
+              className="flex-1 px-2 py-1.5 rounded border border-border bg-background text-xs outline-none focus:border-primary"
+            />
+          </div>
+          <button type="submit" className="w-full py-1.5 rounded bg-primary text-white text-xs">创建</button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPanel(_, ref) {
   useImperativeHandle(ref, () => ({ reload: load }));
   const [positions, setPositions] = useState<Position[]>([]);
@@ -144,6 +285,7 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
   const [usdCny, setUsdCny] = useState(7.25);
   const [hkdCny, setHkdCny] = useState(0.91);
   const [editingPos, setEditingPos] = useState<Position | null>(null);
+  const [showAccountManager, setShowAccountManager] = useState(false);
   const positionsRef = useRef<Position[]>([]);
 
   const fetchQuotes = useCallback((posList: Position[], isInitial = false) => {
@@ -159,7 +301,7 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
       entries.map(([symbol, market]) =>
         fetch(`/api/quote?symbol=${encodeURIComponent(symbol)}&market=${market}`)
           .then((r) => r.json())
-          .then((q) => (q.price ? { symbol, price: q.price, changePct: q.changePct } : null))
+          .then((q) => (q.price ? { symbol, price: q.price, changePct: q.changePct, change: q.change || 0 } : null))
           .catch(() => null)
       )
     ).then((results) => {
@@ -167,7 +309,7 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
         const next = new Map(prev);
         for (const r of results) {
           if (r.status === "fulfilled" && r.value) {
-            next.set(r.value.symbol, { price: r.value.price, changePct: r.value.changePct });
+            next.set(r.value.symbol, { price: r.value.price, changePct: r.value.changePct, change: r.value.change });
           }
         }
         return next;
@@ -367,16 +509,35 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
     load();
   };
 
-  const handleSetBalance = async (account: BrokerAccountInfo) => {
-    const sym = CURRENCY_SYMBOL[account.currency] || "";
-    const v = prompt(`${account.name} 新余额:`, String(account.cashBalance));
-    if (v === null || isNaN(Number(v))) return;
-    await fetch(`/api/broker-accounts/${account.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cashBalance: Number(v) }),
-    });
-    load();
+  const accountActions = {
+    create: async (name: string, currency: string, initialBalance: number) => {
+      await fetch("/api/broker-accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, currency, initialBalance }),
+      });
+      load();
+    },
+    rename: async (id: string, name: string) => {
+      await fetch(`/api/broker-accounts/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      load();
+    },
+    setBalance: async (id: string, cashBalance: number) => {
+      await fetch(`/api/broker-accounts/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cashBalance }),
+      });
+      load();
+    },
+    delete: async (id: string) => {
+      await fetch(`/api/broker-accounts/${id}`, { method: "DELETE" });
+      load();
+    },
   };
 
   return (
@@ -487,7 +648,15 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`text-xs font-medium ${!hasQuote && !futures ? "text-muted" : dailyIsProfit ? "text-profit" : "text-loss"}`}>
-                      {!hasQuote && !futures ? "--" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`}
+                      {!hasQuote && !futures ? "--" : (() => {
+                        const changeVal = q?.change ?? 0;
+                        const dailyCny = pos.market === "us_stock" ? changeVal * pos.quantity * usdCny
+                          : pos.market === "hk_stock" ? changeVal * pos.quantity * hkdCny
+                          : pos.market === "crypto" ? changeVal * pos.quantity * usdCny
+                          : changeVal * pos.quantity;
+                        const sign = dailyCny >= 0 ? "+" : "";
+                        return `${sign}¥${dailyCny.toFixed(2)} (${sign}${changePct.toFixed(2)}%)`;
+                      })()}
                     </span>
                     <button
                       onClick={() => setEditingPos(pos)}
@@ -544,7 +713,7 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
                     <span className={hasQuote ? (profit >= 0 ? "text-profit" : "text-loss") : "text-muted"}>
                       {!hasQuote ? "--"
                         : profitHasCost
-                        ? `¥${(posValue(pos) ?? 0).toFixed(2)} (${profitPct >= 0 ? "+" : ""}${profitPct.toFixed(2)}%)`
+                        ? `${profit >= 0 ? "+" : ""}¥${profit.toFixed(2)} (${profitPct >= 0 ? "+" : ""}${profitPct.toFixed(2)}%)`
                         : `¥${(posValue(pos) ?? 0).toFixed(2)}`}
                     </span>
                   </div>
@@ -565,8 +734,21 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
         />
       )}
 
+      {/* Account manager modal */}
+      {showAccountManager && (
+        <AccountManageModal
+          accounts={brokerAccounts}
+          actions={accountActions}
+          onClose={() => setShowAccountManager(false)}
+        />
+      )}
+
       {/* Account balances */}
       <div className="px-3 py-2 border-t border-border text-xs text-muted space-y-1">
+        <div className="flex justify-between items-center mb-0.5">
+          <span>账户</span>
+          <button onClick={() => setShowAccountManager(true)} className="text-xs text-primary hover:underline">管理</button>
+        </div>
         {(filter === "all" || filter === "crypto") && exchangeAccounts.map((a) => {
           const b = safeBal(a);
           const unusedFutures = Math.max(b.futures - futuresMarginTotal, 0);
@@ -596,17 +778,14 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
             const sym = CURRENCY_SYMBOL[a.currency] || "";
             const cny = a.currency === "USD" ? a.cashBalance * usdCny : a.currency === "HKD" ? a.cashBalance * hkdCny : a.cashBalance;
             return (
-              <div key={a.id} className="flex justify-between items-center">
+              <div key={a.id} className="flex justify-between">
                 <span>{a.name}</span>
-                <button
-                  onClick={() => handleSetBalance(a)}
-                  className={`hover:underline ${a.cashBalance < 0 ? "text-loss" : "text-foreground"}`}
-                >
+                <span className={a.cashBalance < 0 ? "text-loss" : "text-foreground"}>
                   {sym}{a.cashBalance.toFixed(2)}
                   {a.currency !== "CNY" && (
                     <span className="text-muted ml-1">(¥{cny.toFixed(2)})</span>
                   )}
-                </button>
+                </span>
               </div>
             );
           })}
