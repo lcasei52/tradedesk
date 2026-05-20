@@ -286,6 +286,8 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
   const [hkdCny, setHkdCny] = useState(0.91);
   const [editingPos, setEditingPos] = useState<Position | null>(null);
   const [showAccountManager, setShowAccountManager] = useState(false);
+  const [showTradeHistory, setShowTradeHistory] = useState(false);
+  const [totalRealizedPnl, setTotalRealizedPnl] = useState(0);
   const positionsRef = useRef<Position[]>([]);
 
   const fetchQuotes = useCallback((posList: Position[], isInitial = false) => {
@@ -336,6 +338,11 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
     fetch("/api/broker-accounts")
       .then((r) => r.json())
       .then((data: BrokerAccountInfo[]) => setBrokerAccounts(data))
+      .catch(() => {});
+
+    fetch("/api/trades")
+      .then((r) => r.json())
+      .then((data: { totalRealizedPnl: number }) => setTotalRealizedPnl(data.totalRealizedPnl))
       .catch(() => {});
 
     fetch("/api/quote?symbol=USDCNY&market=forex")
@@ -562,10 +569,15 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
         </div>
         {allQuotesReady || filtered.length === 0 ? (
           <div className={`text-xs mt-1 ${displayProfit >= 0 ? "text-loss" : "text-profit"}`}>
-            {displayProfit >= 0 ? "+" : ""}{displayProfit.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            浮动 {displayProfit >= 0 ? "+" : ""}{displayProfit.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             ({displayProfitPct >= 0 ? "+" : ""}{displayProfitPct.toFixed(2)}%)
           </div>
         ) : null}
+        {totalRealizedPnl !== 0 && (
+          <div className={`text-xs mt-0.5 ${totalRealizedPnl >= 0 ? "text-loss" : "text-profit"}`}>
+            已实现 {totalRealizedPnl >= 0 ? "+" : ""}¥{totalRealizedPnl.toFixed(2)}
+          </div>
+        )}
         <div className="text-xs text-muted mt-0.5">
           成本 ¥{displayCost.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · {filtered.length} 只持仓
         </div>
@@ -766,6 +778,11 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
         />
       )}
 
+      {/* Trade history modal */}
+      {showTradeHistory && (
+        <TradeHistoryModal onClose={() => { setShowTradeHistory(false); load(); }} />
+      )}
+
       {/* Account balances */}
       <div className="px-3 py-2 border-t border-border text-xs text-muted space-y-1">
         <div className="flex justify-between items-center mb-0.5">
@@ -853,9 +870,141 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
         >
           + 添加持仓
         </button>
+        <button
+          onClick={() => setShowTradeHistory(true)}
+          className="w-full py-1.5 mt-2 text-xs text-muted hover:text-primary transition-colors"
+        >
+          交易记录
+        </button>
       </div>
     </div>
   );
 });
+
+interface TradeInfo {
+  id: string;
+  symbol: string;
+  name: string;
+  market: string;
+  side: string;
+  quantity: number;
+  price: number;
+  costPrice: number;
+  realizedPnl: number;
+  manual: boolean;
+  note: string | null;
+  createdAt: string;
+}
+
+function TradeHistoryModal({ onClose }: { onClose: () => void }) {
+  const [trades, setTrades] = useState<TradeInfo[]>([]);
+  const [totalPnl, setTotalPnl] = useState(0);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ symbol: "", name: "", market: "a_share", buyPrice: "", sellPrice: "", quantity: "", note: "" });
+
+  useEffect(() => {
+    fetch("/api/trades").then((r) => r.json()).then((data) => {
+      setTrades(data.trades || []);
+      setTotalPnl(data.totalRealizedPnl || 0);
+    }).catch(() => {});
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const { symbol, name, market, buyPrice, sellPrice, quantity, note } = form;
+    if (!symbol || !name || !buyPrice || !sellPrice || !quantity) return;
+    await fetch("/api/trades", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        symbol, name, market, side: "sell",
+        quantity: Number(quantity), price: Number(sellPrice), costPrice: Number(buyPrice),
+        realizedPnl: (Number(sellPrice) - Number(buyPrice)) * Number(quantity),
+        note: note || undefined,
+      }),
+    });
+    setForm({ symbol: "", name: "", market: "a_share", buyPrice: "", sellPrice: "", quantity: "", note: "" });
+    setShowForm(false);
+    const res = await fetch("/api/trades").then((r) => r.json());
+    setTrades(res.trades || []);
+    setTotalPnl(res.totalRealizedPnl || 0);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="bg-card-bg border border-border rounded-lg p-4 w-96 max-h-[80vh] overflow-y-auto shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="text-sm font-medium">交易记录</h3>
+          <button onClick={onClose} className="text-xs text-muted hover:text-foreground">✕</button>
+        </div>
+
+        {totalPnl !== 0 && (
+          <div className={`text-xs mb-3 ${totalPnl >= 0 ? "text-loss" : "text-profit"}`}>
+            累计已实现 {totalPnl >= 0 ? "+" : ""}¥{totalPnl.toFixed(2)}
+          </div>
+        )}
+
+        {trades.length === 0 ? (
+          <div className="text-xs text-muted text-center py-3">暂无交易记录</div>
+        ) : (
+          <div className="space-y-1.5 mb-3">
+            {trades.map((t) => (
+              <div key={t.id} className="text-xs border-b border-border pb-1.5">
+                <div className="flex justify-between">
+                  <span>
+                    <span className={`font-medium ${t.side === "buy" ? "text-loss" : "text-profit"}`}>
+                      {t.side === "buy" ? "买入" : "卖出"}
+                    </span>
+                    {" "}{t.name}({t.symbol})
+                  </span>
+                  <span className="text-muted">{new Date(t.createdAt).toLocaleDateString("zh-CN")}</span>
+                </div>
+                <div className="flex justify-between mt-0.5">
+                  <span className="text-muted">{t.quantity}份 @ {t.price} {t.costPrice !== t.price && `(成本${t.costPrice})`}</span>
+                  {t.side === "sell" && (
+                    <span className={t.realizedPnl >= 0 ? "text-loss" : "text-profit"}>
+                      {t.realizedPnl >= 0 ? "+" : ""}¥{t.realizedPnl.toFixed(2)}
+                    </span>
+                  )}
+                </div>
+                {t.note && <div className="text-muted mt-0.5">{t.note}</div>}
+                {t.manual && <span className="text-muted text-[10px]">手动录入</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {showForm ? (
+          <form onSubmit={handleSubmit} className="border-t border-border pt-3 space-y-2">
+            <div className="text-xs text-muted">添加历史交易</div>
+            <div className="flex gap-2">
+              <input value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })} placeholder="代码" className="w-20 px-2 py-1.5 rounded border border-border bg-background text-xs outline-none" />
+              <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="名称" className="flex-1 px-2 py-1.5 rounded border border-border bg-background text-xs outline-none" />
+            </div>
+            <div className="flex gap-2">
+              <select value={form.market} onChange={(e) => setForm({ ...form, market: e.target.value })} className="px-2 py-1.5 rounded border border-border bg-card-bg text-xs outline-none">
+                <option value="a_share">A股</option><option value="hk_stock">港股</option><option value="us_stock">美股</option><option value="crypto">加密</option><option value="fund">基金</option>
+              </select>
+              <input type="number" step="any" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} placeholder="数量" className="flex-1 px-2 py-1.5 rounded border border-border bg-background text-xs outline-none" />
+            </div>
+            <div className="flex gap-2">
+              <input type="number" step="any" value={form.buyPrice} onChange={(e) => setForm({ ...form, buyPrice: e.target.value })} placeholder="买入价" className="flex-1 px-2 py-1.5 rounded border border-border bg-background text-xs outline-none" />
+              <input type="number" step="any" value={form.sellPrice} onChange={(e) => setForm({ ...form, sellPrice: e.target.value })} placeholder="卖出价" className="flex-1 px-2 py-1.5 rounded border border-border bg-background text-xs outline-none" />
+            </div>
+            <input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="备注（可选）" className="w-full px-2 py-1.5 rounded border border-border bg-background text-xs outline-none" />
+            <div className="flex gap-2">
+              <button type="submit" className="flex-1 py-1.5 rounded bg-primary text-white text-xs">添加</button>
+              <button type="button" onClick={() => setShowForm(false)} className="flex-1 py-1.5 rounded border border-border text-xs">取消</button>
+            </div>
+          </form>
+        ) : (
+          <button onClick={() => setShowForm(true)} className="w-full py-1.5 rounded border border-dashed border-border text-xs text-muted hover:border-primary hover:text-primary transition-colors">
+            + 添加历史交易
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default PortfolioPanel;

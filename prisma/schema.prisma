@@ -78,4 +78,23 @@ model BrokerAccount {
   updatedAt   DateTime @updatedAt
 
   positions Position[]
+  trades    Trade[]
+}
+
+model Trade {
+  id              String   @id @default(cuid())
+  symbol          String
+  name            String
+  market          String   // "a_share" | "hk_stock" | "us_stock" | "crypto" | "fund"
+  side            String   // "buy" | "sell"
+  quantity        Float
+  price           Float    // 成交价
+  costPrice       Float    // 买入成本价（卖出时用于算盈亏）
+  realizedPnl     Float    @default(0) // 已实现盈亏（CNY），买入为0
+  brokerAccountId String?
+  manual          Boolean  @default(false)
+  note            String?
+  createdAt       DateTime @default(now())
+
+  brokerAccount   BrokerAccount? @relation(fields: [brokerAccountId], references: [id])
 }

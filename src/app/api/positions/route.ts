@@ -18,7 +18,6 @@ async function adjustCash(market: string, exchangeAccountId: string | null, brok
   });
 }
 
-// Find or create a default broker account for the given market's currency
 async function findAccountForMarket(market: string): Promise<string | null> {
   const currency = MARKET_CURRENCY[market];
   if (!currency) return null;
@@ -62,6 +61,9 @@ export async function POST(req: NextRequest) {
       data: { quantity: totalQty, costPrice: Math.round(avgCost * 10000) / 10000, name, market },
     });
     await adjustCash(market, existing.exchangeAccountId, existing.brokerAccountId, -buyAmount);
+    await prisma.trade.create({
+      data: { symbol, name, market, side: "buy", quantity, price: costPrice, costPrice, realizedPnl: 0, brokerAccountId },
+    });
     return NextResponse.json(updated);
   }
 
@@ -69,6 +71,9 @@ export async function POST(req: NextRequest) {
     data: { symbol, name, market, quantity, costPrice, brokerAccountId },
   });
   await adjustCash(market, null, brokerAccountId, -buyAmount);
+  await prisma.trade.create({
+    data: { symbol, name, market, side: "buy", quantity, price: costPrice, costPrice, realizedPnl: 0, brokerAccountId },
+  });
   return NextResponse.json(position);
 }
 
@@ -82,6 +87,13 @@ export async function DELETE(req: NextRequest) {
   if (!pos) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const sellAmount = pos.costPrice * pos.quantity;
+  await prisma.trade.create({
+    data: {
+      symbol: pos.symbol, name: pos.name, market: pos.market,
+      side: "sell", quantity: pos.quantity, price: pos.costPrice, costPrice: pos.costPrice,
+      realizedPnl: 0, brokerAccountId: pos.brokerAccountId,
+    },
+  });
   await prisma.position.delete({ where: { id: pos.id } });
   await adjustCash(pos.market, pos.exchangeAccountId, pos.brokerAccountId, sellAmount);
   return NextResponse.json({ ok: true });
@@ -99,6 +111,13 @@ export async function PUT(req: NextRequest) {
 
   if (quantity !== undefined && quantity <= 0) {
     const sellAmount = pos.costPrice * pos.quantity;
+    await prisma.trade.create({
+      data: {
+        symbol: pos.symbol, name: pos.name, market: pos.market,
+        side: "sell", quantity: pos.quantity, price: pos.costPrice, costPrice: pos.costPrice,
+        realizedPnl: 0, brokerAccountId: pos.brokerAccountId,
+      },
+    });
     await prisma.position.delete({ where: { id: pos.id } });
     await adjustCash(pos.market, pos.exchangeAccountId, pos.brokerAccountId, sellAmount);
     return NextResponse.json({ ok: true, deleted: true });
@@ -109,6 +128,13 @@ export async function PUT(req: NextRequest) {
     const soldQty = pos.quantity - quantity;
     const sellAmount = pos.costPrice * soldQty;
     await adjustCash(pos.market, pos.exchangeAccountId, pos.brokerAccountId, sellAmount);
+    await prisma.trade.create({
+      data: {
+        symbol: pos.symbol, name: pos.name, market: pos.market,
+        side: "sell", quantity: soldQty, price: pos.costPrice, costPrice: pos.costPrice,
+        realizedPnl: 0, brokerAccountId: pos.brokerAccountId,
+      },
+    });
   }
 
   const data: Record<string, unknown> = {};

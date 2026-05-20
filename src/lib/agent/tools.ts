@@ -162,6 +162,23 @@ export const toolDefinitions = [
     description: "生成今日持仓日报并推送到 Telegram。",
     input_schema: { type: "object" as const, properties: {} },
   },
+  {
+    name: "record_trade",
+    description: "手动记录一笔历史交易。当用户说'记录一笔交易'、'我之前买过/卖过XX'时调用。自动计算盈亏。",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        symbol: { type: "string", description: "代码" },
+        name: { type: "string", description: "名称" },
+        market: { type: "string", enum: ["a_share", "hk_stock", "us_stock", "crypto", "fund"], description: "市场" },
+        buy_price: { type: "number", description: "买入价格" },
+        sell_price: { type: "number", description: "卖出价格" },
+        quantity: { type: "number", description: "数量" },
+        note: { type: "string", description: "备注（可选）" },
+      },
+      required: ["symbol", "name", "market", "buy_price", "sell_price", "quantity"],
+    },
+  },
 ];
 
 interface ToolContext {
@@ -197,15 +214,20 @@ export async function executeTool(
             brokerAccount: { select: { name: true, currency: true } },
           },
         });
-        if (positions.length === 0) return { content: "当前无持仓" };
+        const trades = await prisma.trade.findMany({ where: { side: "sell" } });
+        const totalRealizedPnl = trades.reduce((s, t) => s + t.realizedPnl, 0);
+        if (positions.length === 0) return { content: JSON.stringify({ positions: [], totalRealizedPnl }) };
         return {
-          content: JSON.stringify(positions.map((p) => ({
-            symbol: p.symbol, name: p.name, market: p.market, quantity: p.quantity,
-            costPrice: p.costPrice, direction: p.direction, leverage: p.leverage,
-            margin: p.margin, entryPrice: p.entryPrice, unrealizedPnl: p.unrealizedPnl,
-            liquidationPrice: p.liquidationPrice, exchangeAccount: p.exchangeAccount?.name ?? null,
-            brokerAccount: p.brokerAccount?.name ?? null,
-          }))),
+          content: JSON.stringify({
+            positions: positions.map((p) => ({
+              symbol: p.symbol, name: p.name, market: p.market, quantity: p.quantity,
+              costPrice: p.costPrice, direction: p.direction, leverage: p.leverage,
+              margin: p.margin, entryPrice: p.entryPrice, unrealizedPnl: p.unrealizedPnl,
+              liquidationPrice: p.liquidationPrice, exchangeAccount: p.exchangeAccount?.name ?? null,
+              brokerAccount: p.brokerAccount?.name ?? null,
+            })),
+            totalRealizedPnl,
+          }),
         };
       }
 
@@ -288,26 +310,40 @@ export async function executeTool(
               data: { quantity: totalQty, costPrice: Math.round(avgCost * 10000) / 10000, name: realName, market },
             });
             await adjustCash(market, existing.brokerAccountId, -amount);
+            await prisma.trade.create({
+              data: { symbol, name: realName, market, side: "buy", quantity, price, costPrice: price, realizedPnl: 0, brokerAccountId },
+            });
             return { content: `买入成功：${realName}(${symbol}) +${quantity}股 @ ${price}，当前持有 ${totalQty}股，成本价 ${avgCost.toFixed(4)}` };
           }
           await prisma.position.create({ data: { symbol, name: realName, market, quantity, costPrice: price, brokerAccountId } });
           await adjustCash(market, brokerAccountId, -amount);
+          await prisma.trade.create({
+            data: { symbol, name: realName, market, side: "buy", quantity, price, costPrice: price, realizedPnl: 0, brokerAccountId },
+          });
           return { content: `建仓成功：${realName}(${symbol}) ${quantity}股 @ ${price}` };
         }
         if (action === "sell") {
           const existing = await prisma.position.findFirst({ where: { symbol, market, direction: null, brokerAccountId } });
           if (!existing) return { content: `未找到 ${symbol} 的持仓`, error: true };
           const realName = existing.name;
-          const sellAmount = price * Math.min(quantity, existing.quantity);
+          const sellQty = Math.min(quantity, existing.quantity);
+          const sellAmount = price * sellQty;
+          const pnl = (price - existing.costPrice) * sellQty;
           const remaining = existing.quantity - quantity;
           if (remaining <= 0) {
             await prisma.position.delete({ where: { id: existing.id } });
             await adjustCash(market, existing.brokerAccountId, sellAmount);
-            return { content: `清仓：${realName}(${symbol}) 全部卖出 @ ${price}` };
+            await prisma.trade.create({
+              data: { symbol, name: realName, market, side: "sell", quantity: existing.quantity, price, costPrice: existing.costPrice, realizedPnl: pnl, brokerAccountId: existing.brokerAccountId },
+            });
+            return { content: `清仓：${realName}(${symbol}) 全部卖出 @ ${price}，盈亏 ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}` };
           }
           await prisma.position.update({ where: { id: existing.id }, data: { quantity: remaining } });
           await adjustCash(market, existing.brokerAccountId, sellAmount);
-          return { content: `卖出成功：${realName}(${symbol}) -${quantity}股 @ ${price}，剩余 ${remaining}股` };
+          await prisma.trade.create({
+            data: { symbol, name: realName, market, side: "sell", quantity: sellQty, price, costPrice: existing.costPrice, realizedPnl: pnl, brokerAccountId: existing.brokerAccountId },
+          });
+          return { content: `卖出成功：${realName}(${symbol}) -${sellQty}股 @ ${price}，剩余 ${remaining}股，盈亏 ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}` };
         }
         return { content: `未知操作：${action}`, error: true };
       }
@@ -448,6 +484,17 @@ export async function executeTool(
         if (!ok) return { content: "日报已生成但推送失败", error: true };
         await saveDailySnapshot();
         return { content: `日报已推送到 Telegram ✅` };
+      }
+
+      case "record_trade": {
+        const { symbol, name, market, buy_price, sell_price, quantity, note } = input as {
+          symbol: string; name: string; market: string; buy_price: number; sell_price: number; quantity: number; note?: string;
+        };
+        const pnl = (sell_price - buy_price) * quantity;
+        await prisma.trade.create({
+          data: { symbol, name, market, side: "sell", quantity, price: sell_price, costPrice: buy_price, realizedPnl: pnl, manual: true, note },
+        });
+        return { content: `已记录历史交易：${name}(${symbol}) 买入@${buy_price} 卖出@${sell_price} ${quantity}股，盈亏 ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}` };
       }
 
       default:

@@ -36,6 +36,7 @@ interface ReportData {
   totalProfitPct: number;
   dailyChange: number;
   dailyChangePct: number;
+  totalRealizedPnl: number;
 }
 
 function isFutures(p: PositionRow) {
@@ -114,6 +115,12 @@ async function collectData(): Promise<ReportData> {
   });
   recentSnapshots.reverse();
 
+  const realizedPnlResult = await prisma.trade.aggregate({
+    where: { side: "sell" },
+    _sum: { realizedPnl: true },
+  });
+  const totalRealizedPnl = realizedPnlResult._sum.realizedPnl || 0;
+
   return {
     positions: positions.map((p) => ({
       symbol: p.symbol,
@@ -139,6 +146,7 @@ async function collectData(): Promise<ReportData> {
     totalProfitPct,
     dailyChange,
     dailyChangePct,
+    totalRealizedPnl,
   };
 }
 
@@ -152,7 +160,7 @@ function sparkline(values: number[]): string {
 }
 
 function buildMarkdownReport(data: ReportData): string {
-  const { positions, quotes, recentSnapshots, totalCost, totalValue, totalProfit, totalProfitPct, dailyChange, dailyChangePct } = data;
+  const { positions, quotes, recentSnapshots, totalCost, totalValue, totalProfit, totalProfitPct, dailyChange, dailyChangePct, totalRealizedPnl } = data;
 
   const today = new Date().toLocaleDateString("zh-CN", {
     year: "numeric",
@@ -172,6 +180,7 @@ function buildMarkdownReport(data: ReportData): string {
     `  📈 累计盈亏  ${totalProfit >= 0 ? "+" : ""}¥${totalProfit.toFixed(2)} (${totalProfitPct >= 0 ? "+" : ""}${totalProfitPct.toFixed(2)}%)`,
     `  📊 日变动  ${dailyChange >= 0 ? "+" : ""}¥${dailyChange.toFixed(2)} (${dailyChangePct >= 0 ? "+" : ""}${dailyChangePct.toFixed(2)}%)`,
     `  📦 持仓数  ${positions.length}`,
+    `  📝 已实现盈亏  ${totalRealizedPnl >= 0 ? "+" : ""}¥${totalRealizedPnl.toFixed(2)}`,
   ];
 
   if (recentSnapshots.length >= 2) {
