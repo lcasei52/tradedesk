@@ -630,6 +630,11 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
 
             const directionLabel = isShort ? "空" : pos.direction === "long" ? "多" : null;
 
+            // Market value in CNY for % calc
+            const mktVal = posValue(pos);
+            const mktValCny = mktVal ?? 0;
+            const totalAssets = displayValue > 0 ? displayValue : 1;
+
             return (
               <div key={pos.id} className="p-3 border-b border-border hover:bg-border/30 group relative">
                 <div className="flex justify-between items-start">
@@ -647,17 +652,6 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className={`text-xs font-medium ${!hasQuote && !futures ? "text-muted" : dailyIsProfit ? "text-profit" : "text-loss"}`}>
-                      {!hasQuote && !futures ? "--" : (() => {
-                        const changeVal = q?.change ?? 0;
-                        const dailyCny = pos.market === "us_stock" ? changeVal * pos.quantity * usdCny
-                          : pos.market === "hk_stock" ? changeVal * pos.quantity * hkdCny
-                          : pos.market === "crypto" ? changeVal * pos.quantity * usdCny
-                          : changeVal * pos.quantity;
-                        const sign = dailyCny >= 0 ? "+" : "";
-                        return `${sign}¥${dailyCny.toFixed(2)} (${sign}${changePct.toFixed(2)}%)`;
-                      })()}
-                    </span>
                     <button
                       onClick={() => setEditingPos(pos)}
                       className="opacity-0 group-hover:opacity-100 text-xs text-muted hover:text-primary transition-opacity"
@@ -696,8 +690,8 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
                     )}
                   </div>
                 ) : (
-                  <div className="flex justify-between mt-1.5 text-xs">
-                    <span className="text-muted">
+                  <div className="mt-1.5 text-xs space-y-0.5">
+                    <div className="text-muted">
                       {!hasQuote
                         ? pos.market === "fund"
                           ? `${pos.quantity} 份 · 成本 ${pos.costPrice.toFixed(4)} · 净值 --`
@@ -705,17 +699,46 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
                           ? `${pos.quantity} 枚 · 现价 --`
                           : `${pos.quantity} 股 · 成本 ${pos.costPrice} · 现价 --`
                         : pos.market === "crypto"
-                        ? `${pos.quantity} 枚 · 现价 ${currentPrice.toFixed(2)} USDT (¥${(currentPrice * pos.quantity * usdCny).toFixed(2)})`
+                        ? `${pos.quantity} 枚 · 现价 ${currentPrice.toFixed(2)} USDT`
                         : pos.market === "fund"
                         ? `${pos.quantity} 份 · 成本 ${pos.costPrice.toFixed(4)} · 净值 ${currentPrice.toFixed(4)}`
                         : `${pos.quantity} 股 · 成本 ${pos.costPrice} · 现价 ${currentPrice.toFixed(4)}`}
-                    </span>
-                    <span className={hasQuote ? (profit >= 0 ? "text-profit" : "text-loss") : "text-muted"}>
-                      {!hasQuote ? "--"
-                        : profitHasCost
-                        ? `${profit >= 0 ? "+" : ""}¥${profit.toFixed(2)} (${profitPct >= 0 ? "+" : ""}${profitPct.toFixed(2)}%)`
-                        : `¥${(posValue(pos) ?? 0).toFixed(2)}`}
-                    </span>
+                    </div>
+                    {hasQuote && (
+                      <div className="flex justify-between">
+                        <span>
+                          <span className="text-muted">市值 </span>
+                          <span className="text-foreground">¥{mktValCny.toFixed(2)}</span>
+                          <span className="text-muted"> ({((mktValCny / totalAssets) * 100).toFixed(1)}%)</span>
+                        </span>
+                        {profitHasCost && (
+                          <span>
+                            <span className="text-muted">收益 </span>
+                            <span className={profit >= 0 ? "text-profit" : "text-loss"}>
+                              {profit >= 0 ? "+" : ""}¥{profit.toFixed(2)} ({profitPct >= 0 ? "+" : ""}{profitPct.toFixed(2)}%)
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {hasQuote && (
+                      <div className="flex justify-end">
+                        <span>
+                          <span className="text-muted">今日 </span>
+                          <span className={`font-medium ${dailyIsProfit ? "text-profit" : "text-loss"}`}>
+                            {(() => {
+                              const changeVal = q?.change ?? 0;
+                              const dailyCny = pos.market === "us_stock" ? changeVal * pos.quantity * usdCny
+                                : pos.market === "hk_stock" ? changeVal * pos.quantity * hkdCny
+                                : pos.market === "crypto" ? changeVal * pos.quantity * usdCny
+                                : changeVal * pos.quantity;
+                              const sign = dailyCny >= 0 ? "+" : "";
+                              return `${sign}¥${dailyCny.toFixed(2)} (${sign}${changePct.toFixed(2)}%)`;
+                            })()}
+                          </span>
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
