@@ -468,7 +468,11 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
     if (pos.exchangeAccountId) {
       if (!confirm("该持仓来自交易所同步，删除后下次同步会恢复。确定删除？")) return;
     }
-    await fetch(`/api/positions?symbol=${encodeURIComponent(pos.symbol)}&market=${pos.market}`, { method: "DELETE" });
+    const q = quotes.get(pos.symbol);
+    const price = q?.price;
+    const params = new URLSearchParams({ symbol: pos.symbol, market: pos.market });
+    if (price != null) params.set("price", String(price));
+    await fetch(`/api/positions?${params}`, { method: "DELETE" });
     load();
   };
 
@@ -503,6 +507,12 @@ const PortfolioPanel = forwardRef<{ reload: () => void }>(function PortfolioPane
     if (data.quantity !== undefined) updateData.quantity = data.quantity;
     if (data.costPrice !== undefined) updateData.costPrice = data.costPrice;
     if (data.brokerAccountId !== undefined) updateData.brokerAccountId = data.brokerAccountId;
+
+    // 部分卖出时传当前市价，用于计算已实现盈亏
+    if (data.quantity !== undefined && data.quantity < pos.quantity) {
+      const q = quotes.get(pos.symbol);
+      if (q?.price != null) updateData.price = q.price;
+    }
 
     if (Object.keys(updateData).length > 0) {
       await fetch("/api/positions", {
